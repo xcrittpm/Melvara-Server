@@ -65,7 +65,7 @@ async def lifespan(app):
             catalog.set_meta("clientId", client_id)
         plex = Plex(plex_url, plex_token, client_id)
         syncer = Syncer(catalog, plex, int(os.environ.get("SYNC_INTERVAL_MINUTES", "30")))
-        configure(catalog, Auth(plex_url), RateLimiter(int(os.environ.get("RATE_LIMIT_PER_MINUTE", "240"))), syncer)
+        configure(catalog, Auth(plex_url), RateLimiter(int(os.environ.get("RATE_LIMIT_PER_MINUTE", "600"))), syncer)
         syncer.start()
         log.info("Sonora Server %s listo", __version__)
     yield

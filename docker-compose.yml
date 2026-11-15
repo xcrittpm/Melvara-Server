@@ -15,7 +15,7 @@ services:
       # Token de la cuenta dueña del servidor Plex. Solo se usa para leer la biblioteca.
       PLEX_TOKEN: ${PLEX_TOKEN}
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-30}
-      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-240}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-600}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - sonora-data:/data

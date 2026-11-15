@@ -53,7 +53,7 @@ le pregunta directamente. Es opcional: en la app eliges **Ajustes → Buscador �
 | `PLEX_URL` | — | Dirección de Plex desde el contenedor |
 | `PLEX_TOKEN` | — | Token de la cuenta dueña (solo lectura de la biblioteca) |
 | `SYNC_INTERVAL_MINUTES` | `30` | Cada cuánto busca novedades |
-| `RATE_LIMIT_PER_MINUTE` | `240` | Peticiones por minuto y usuario |
+| `RATE_LIMIT_PER_MINUTE` | `600` | Peticiones por minuto y usuario |
 | `LOG_LEVEL` | `INFO` | `DEBUG` para ver el detalle de la sincronización |
 
 ## Publicarlo con tu dominio (HTTPS)
