@@ -31,6 +31,9 @@ le pregunta directamente. Es opcional: en la app eliges **Ajustes → Buscador �
 
 ## Instalación con Portainer
 
+> **Imagen ya hecha:** `ghcr.io/xcrittpm/sonora-server:latest` (amd64 y arm64), publicada por GitHub Actions
+> con cada cambio. En Portainer puedes usar el *Web editor* con `image:` en lugar de `build: .`.
+
 1. **Stacks → Add stack → Repository**, apuntando a este repositorio y con
    *Compose path* `server/docker-compose.yml`.
    (O bien **Web editor**: pega `docker-compose.yml` y cambia `build: .` por la imagen que hayas
