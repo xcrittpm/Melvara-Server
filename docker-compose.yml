@@ -1,0 +1,34 @@
+# Sonora Server: índice de búsqueda para la app Sonora.
+# En Portainer: Stacks → Add stack → pega este archivo (o apúntalo al repositorio)
+# y define PLEX_URL y PLEX_TOKEN en «Environment variables».
+
+services:
+  sonora-server:
+    build: .
+    image: sonora-server:latest
+    container_name: sonora-server
+    restart: unless-stopped
+    environment:
+      # Dirección de tu Plex vista DESDE el contenedor (no la pública).
+      # Ejemplos: http://plex:32400 (misma red de Docker) o http://192.168.1.10:32400
+      PLEX_URL: ${PLEX_URL}
+      # Token de la cuenta dueña del servidor Plex. Solo se usa para leer la biblioteca.
+      PLEX_TOKEN: ${PLEX_TOKEN}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-30}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-240}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - sonora-data:/data
+    ports:
+      # Solo hace falta si tu proxy no está en la misma red de Docker.
+      - "8095:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  sonora-data:
