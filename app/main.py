@@ -22,6 +22,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 log = logging.getLogger("sonora")
+# Una línea por cada petición a Plex es demasiado ruido (y no aporta nada a quien lo despliega).
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
