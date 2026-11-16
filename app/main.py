@@ -54,7 +54,7 @@ async def lifespan(app):
             Auth(os.environ["NAVIDROME_URL"]),
             RateLimiter(int(os.environ.get("RATE_LIMIT_PER_MINUTE", "120"))),
             Wishlist(os.path.join(data_dir, "sonora.sqlite")),
-            LastFM(os.environ.get("LASTFM_API_KEY", "")),
+            LastFM(os.environ.get("LASTFM_API_KEY", ""), os.environ.get("LASTFM_SHARED_SECRET", "")),
         )
         log.info("Sonora Server %s listo", __version__)
     yield
@@ -98,8 +98,8 @@ async def health(request: Request):
 
 async def status(request: Request):
     # Público (sin datos): la app lo usa para saber que aquí hay un Sonora Server.
-    return JSONResponse({"service": "sonora-api", "version": __version__, "lastfm": state.lastfm.enabled},
-                        headers=SECURITY_HEADERS)
+    return JSONResponse({"service": "sonora-api", "version": __version__, "lastfm": state.lastfm.enabled,
+                         "lastfmAuth": state.lastfm.can_sign}, headers=SECURITY_HEADERS)
 
 
 async def search(request: Request, user: str):
@@ -109,6 +109,29 @@ async def search(request: Request, user: str):
     if not q or len(q) > 200:
         raise ValueError("Búsqueda vacía o demasiado larga")
     return {"results": await state.lastfm.search(q)}
+
+
+async def charts(request: Request, user: str):
+    if not state.lastfm.enabled:
+        raise ValueError("Este servidor no tiene configurado Last.fm")
+    country = request.query_params.get("country", "").strip().lower() or None
+    if country and len(country) > 60:
+        raise ValueError("País no válido")
+    return {"tracks": await state.lastfm.charts(country)}
+
+
+async def lastfm_call(request: Request, user: str):
+    """La app pide firmar una llamada de Last.fm (iniciar sesión, escuchas). La contraseña de Last.fm, si va,
+    solo se reenvía a Last.fm: no se guarda ni se escribe en los registros."""
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except json.JSONDecodeError:
+        raise ValueError("Datos no válidos")
+    method = str(body.get("method", ""))
+    params = body.get("params") or {}
+    if not isinstance(params, dict) or len(params) > 300:
+        raise ValueError("Datos no válidos")
+    return await state.lastfm.signed(method, params)
 
 
 async def wishlist(request: Request, user: str):
@@ -137,6 +160,8 @@ app = Starlette(
         Route("/health", health),
         Route("/api/v1/status", status),
         Route("/api/v1/lastfm/search", protected(search)),
+        Route("/api/v1/lastfm/charts", protected(charts)),
+        Route("/api/v1/lastfm/call", protected(lastfm_call), methods=["POST"]),
         Route("/api/v1/wishlist", protected(wishlist), methods=["GET", "POST"]),
         Route("/api/v1/wishlist/{id}", protected(wishlist_item), methods=["DELETE"]),
     ],

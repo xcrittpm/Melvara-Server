@@ -24,7 +24,11 @@ class FakeAuth(Auth):
 
 class FakeLastFM(LastFM):
     def __init__(self, key="clave"):
-        super().__init__(key)
+        super().__init__(key, "secreto" if key else "")
+        self.sent = None
+
+    async def charts(self, country, limit=100):
+        return [{"title": "Tusa", "artist": "KAROL G", "country": country}]
 
     async def search(self, query, limit=30):
         return [{"title": "Tan Lines", "artist": "C Marí", "album": "Sempre Cor", "year": None, "listeners": 1, "url": None}]
@@ -90,3 +94,44 @@ def test_rate_limit():
     c = make_client(per_minute=3)
     codes = [c.get("/api/v1/wishlist", headers=headers()).status_code for _ in range(5)]
     assert codes[:3] == [200, 200, 200] and codes[-1] == 429
+
+
+def test_charts():
+    c = make_client()
+    r = c.get("/api/v1/lastfm/charts", params={"country": "Spain"}, headers=headers())
+    assert r.status_code == 200 and r.json()["tracks"][0]["country"] == "spain"
+    assert c.get("/api/v1/lastfm/charts", headers=headers()).json()["tracks"][0]["country"] is None
+
+
+def test_signed_call_only_allowed_methods_and_signature():
+    import asyncio
+    lf = LastFM("clave", "secreto")
+    try:
+        asyncio.run(lf.signed("user.getInfo", {}))
+        assert False, "debería rechazarse"
+    except ValueError:
+        pass
+    # La firma: parámetros ordenados (sin format) + secreto, en md5.
+    import hashlib
+    sent = {}
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True}
+
+    async def fake_post(url, data):
+        sent.update(data)
+        return Resp()
+
+    lf._client.post = fake_post
+    assert asyncio.run(lf.signed("track.scrobble", {"sk": "s", "artist[0]": "A", "format": "x"})) == {"ok": True}
+    base = "".join(k + sent[k] for k in sorted(k for k in sent if k not in ("api_sig", "format"))) + "secreto"
+    assert sent["api_sig"] == hashlib.md5(base.encode()).hexdigest() and sent["format"] == "json"
+    assert c_status_has_auth()
+
+
+def c_status_has_auth():
+    c = make_client()
+    return c.get("/api/v1/status").json()["lastfmAuth"] is True
