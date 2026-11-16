@@ -69,6 +69,16 @@ class Wishlist:
             ).fetchone()
         return self._row(r)
 
+    def all_after(self, after: int, limit: int) -> list[dict]:
+        """Deseos de todos los usuarios con id > after, de menor a mayor (para la ruta de servicio)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, user, title, artist, album, year, added_at FROM wishes WHERE id > ? ORDER BY id LIMIT ?",
+                (after, limit),
+            ).fetchall()
+        return [{"id": r[0], "user": r[1], "title": r[2], "artist": r[3], "album": r[4], "year": r[5], "addedAt": r[6]}
+                for r in rows]
+
     def remove(self, user: str, item_id: int) -> bool:
         with self._lock:
             cur = self._db.execute("DELETE FROM wishes WHERE user = ? AND id = ?", (user, item_id))

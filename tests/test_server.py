@@ -34,9 +34,13 @@ class FakeLastFM(LastFM):
         return [{"title": "Tan Lines", "artist": "C Marí", "album": "Sempre Cor", "year": None, "listeners": 1, "url": None}]
 
 
-def make_client(lastfm_key="clave", per_minute=100):
+SERVICE = "s" * 40
+
+
+def make_client(lastfm_key="clave", per_minute=100, service_token=""):
     tmp = tempfile.mkdtemp()
-    main.configure(FakeAuth(), RateLimiter(per_minute), Wishlist(os.path.join(tmp, "s.sqlite")), FakeLastFM(lastfm_key))
+    main.configure(FakeAuth(), RateLimiter(per_minute), Wishlist(os.path.join(tmp, "s.sqlite")), FakeLastFM(lastfm_key),
+                   service_token)
     return TestClient(main.app)
 
 
@@ -135,3 +139,33 @@ def test_signed_call_only_allowed_methods_and_signature():
 def c_status_has_auth():
     c = make_client()
     return c.get("/api/v1/status").json()["lastfmAuth"] is True
+
+
+def test_service_route_off_without_token():
+    c = make_client()
+    assert c.get("/api/v1/status").json()["serviceApi"] is False
+    assert c.get("/api/v1/service/wishlist", headers={"Authorization": f"Bearer {SERVICE}"}).status_code == 404
+
+
+def test_service_route_reads_everyone_paged():
+    c = make_client(service_token=SERVICE)
+    assert c.get("/api/v1/status").json()["serviceApi"] is True
+    for user, title in [("ana", "Uno"), ("luis", "Dos"), ("ana", "Tres")]:
+        c.post("/api/v1/wishlist", json={"title": title, "artist": "X"}, headers=headers(user))
+    auth = {"Authorization": f"Bearer {SERVICE}"}
+    assert c.get("/api/v1/service/wishlist").status_code == 401
+    r = c.get("/api/v1/service/wishlist", headers={"Authorization": "Bearer malo"})
+    assert r.status_code == 401 and "error" in r.json()
+    page = c.get("/api/v1/service/wishlist", params={"limit": 2}, headers=auth).json()
+    assert [i["title"] for i in page["items"]] == ["Uno", "Dos"] and page["items"][1]["user"] == "luis"
+    assert page["items"][0]["album"] is None and page["next"] == page["items"][1]["id"]
+    rest = c.get("/api/v1/service/wishlist", params={"after": page["next"]}, headers=auth).json()
+    assert [i["title"] for i in rest["items"]] == ["Tres"]
+    empty = c.get("/api/v1/service/wishlist", params={"after": rest["next"]}, headers=auth).json()
+    assert empty == {"items": [], "next": None}
+    for bad in [{"after": -1}, {"limit": 0}, {"limit": 501}, {"after": "x"}]:
+        assert c.get("/api/v1/service/wishlist", params=bad, headers=auth).status_code == 400
+    r = c.get("/api/v1/service/wishlist", headers=auth)
+    assert r.headers["cache-control"] == "no-store" and r.headers["x-content-type-options"] == "nosniff"
+    # Solo lectura.
+    assert c.post("/api/v1/service/wishlist", headers=auth).status_code == 405

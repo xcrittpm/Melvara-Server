@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ SECURITY_HEADERS = {
 
 
 class State:
+    service_token: str = ""
     auth: Auth
     limiter: RateLimiter
     wishlist: Wishlist
@@ -41,8 +43,9 @@ class State:
 state = State()
 
 
-def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM) -> None:
+def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "") -> None:
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
+    state.service_token = service_token.strip()
 
 
 @asynccontextmanager
@@ -55,7 +58,11 @@ async def lifespan(app):
             RateLimiter(int(os.environ.get("RATE_LIMIT_PER_MINUTE", "120"))),
             Wishlist(os.path.join(data_dir, "sonora.sqlite")),
             LastFM(os.environ.get("LASTFM_API_KEY", ""), os.environ.get("LASTFM_SHARED_SECRET", "")),
+            os.environ.get("SERVICE_TOKEN", ""),
         )
+        if state.service_token and len(state.service_token) < 32:
+            log.warning("SERVICE_TOKEN tiene menos de 32 caracteres: la ruta de servicio queda desactivada")
+            state.service_token = ""
         log.info("Sonora Server %s listo", __version__)
     yield
 
@@ -99,7 +106,8 @@ async def health(request: Request):
 async def status(request: Request):
     # Público (sin datos): la app lo usa para saber que aquí hay un Sonora Server.
     return JSONResponse({"service": "sonora-api", "version": __version__, "lastfm": state.lastfm.enabled,
-                         "lastfmAuth": state.lastfm.can_sign}, headers=SECURITY_HEADERS)
+                         "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token)},
+                        headers=SECURITY_HEADERS)
 
 
 async def search(request: Request, user: str):
@@ -134,6 +142,28 @@ async def lastfm_call(request: Request, user: str):
     return await state.lastfm.signed(method, params)
 
 
+async def service_wishlist(request: Request):
+    """Solo lectura, para aplicaciones externas: los deseos de todos los usuarios, por páginas.
+    Protegida con SERVICE_TOKEN (cabecera Authorization: Bearer). Sin token configurado, no existe (404)."""
+    if not state.service_token:
+        return _error(404, "No encontrado")
+    if not state.limiter.allow("service"):
+        return _error(429, "Demasiadas peticiones")
+    auth = request.headers.get("authorization", "")
+    given = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    if not given or not hmac.compare_digest(given.encode(), state.service_token.encode()):
+        return _error(401, "Token de servicio ausente o incorrecto")
+    try:
+        after = int(request.query_params.get("after", "0"))
+        limit = int(request.query_params.get("limit", "200"))
+    except ValueError:
+        return _error(400, "after y limit deben ser números enteros")
+    if after < 0 or not 1 <= limit <= 500:
+        return _error(400, "after debe ser ≥ 0 y limit estar entre 1 y 500")
+    items = state.wishlist.all_after(after, limit)
+    return JSONResponse({"items": items, "next": items[-1]["id"] if items else None}, headers=SECURITY_HEADERS)
+
+
 async def wishlist(request: Request, user: str):
     if request.method == "GET":
         return {"items": state.wishlist.list(user)}
@@ -164,6 +194,7 @@ app = Starlette(
         Route("/api/v1/lastfm/call", protected(lastfm_call), methods=["POST"]),
         Route("/api/v1/wishlist", protected(wishlist), methods=["GET", "POST"]),
         Route("/api/v1/wishlist/{id}", protected(wishlist_item), methods=["DELETE"]),
+        Route("/api/v1/service/wishlist", service_wishlist, methods=["GET"]),
     ],
     lifespan=lifespan,
 )

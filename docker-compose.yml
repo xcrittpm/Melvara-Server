@@ -16,6 +16,9 @@ services:
       # Secreto de esa clave: para que cada uno conecte su perfil de Last.fm sin crear claves.
       LASTFM_SHARED_SECRET: ${LASTFM_SHARED_SECRET:-}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      # Opcional: token (32+ caracteres) para la ruta de solo lectura /api/v1/service/wishlist.
+      # Generarlo: python3 -c "import secrets; print(secrets.token_urlsafe(32))". Vacío = ruta desactivada.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - sonora-data:/data

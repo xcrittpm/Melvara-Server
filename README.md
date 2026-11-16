@@ -41,6 +41,22 @@ no le envía nada.
 3. Publica el puerto 8095 con tu proxy (Caddy, Nginx…) en la dirección de la tabla, con https.
 4. Comprueba: `curl https://<tu-dirección>/api/v1/status` → `{"service":"sonora-api",…}`.
 
+## Ruta de servicio (opcional, para otras aplicaciones)
+
+Con `SERVICE_TOKEN` (32 caracteres o más) se activa una ruta de **solo lectura** con los deseos de todos los
+usuarios, por páginas:
+
+```
+GET /api/v1/service/wishlist?after=<id>&limit=<n>
+Authorization: Bearer <SERVICE_TOKEN>
+```
+
+- `after` ≥ 0 (por defecto 0); `limit` de 1 a 500 (por defecto 200).
+- Devuelve `{"items": [{"id", "user", "title", "artist", "album", "year", "addedAt"}], "next": <último id o null>}`,
+  ordenado por `id`. Para seguir, pide la siguiente página con `after=next`.
+- Sin token o con uno incorrecto: 401. Sin `SERVICE_TOKEN` configurado, la ruta no existe (404).
+- `/api/v1/status` indica `"serviceApi": true` cuando está activa.
+
 ## Legal
 
 Solo se guardan y se piden datos de canciones (título, artista, álbum), no música ni imágenes, y con la clave
