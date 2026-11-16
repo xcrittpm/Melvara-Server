@@ -1,11 +1,8 @@
-"""Seguridad: solo responde a quien tenga una cuenta de Plex con acceso a este servidor de Plex.
+"""Seguridad: solo responde a quien tenga cuenta en tu Navidrome.
 
-Cada petición trae el token de Plex del usuario (el mismo que la app usa con el servidor).
-Lo comprobamos preguntando al propio servidor de Plex qué bibliotecas puede ver ese token:
-- si Plex lo rechaza, no hay acceso;
-- si lo acepta, el usuario solo verá resultados de las secciones de música que tiene compartidas.
-
-Los tokens nunca se guardan ni se escriben en los registros: solo un resumen (hash) en memoria.
+La app manda en cada petición su acceso de Navidrome (usuario, token y sal: md5(contraseña + sal), lo mismo
+que usa con Navidrome; la contraseña nunca viaja). El servidor pregunta al propio Navidrome si ese acceso es
+válido. Los accesos no se guardan ni se escriben en los registros: solo un resumen (hash) en memoria.
 """
 
 from __future__ import annotations
@@ -22,49 +19,47 @@ log = logging.getLogger("sonora.auth")
 
 
 class Auth:
-    def __init__(self, plex_url: str, ttl: int = 600, negative_ttl: int = 60):
-        self.plex_url = plex_url.rstrip("/")
+    def __init__(self, navidrome_url: str, ttl: int = 600, negative_ttl: int = 60):
+        self.navidrome_url = navidrome_url.rstrip("/")
         self.ttl = ttl
         self.negative_ttl = negative_ttl
-        self._cache: dict[str, tuple[float, frozenset[int] | None]] = {}
+        self._cache: dict[str, tuple[float, str | None]] = {}
         self._lock = threading.Lock()
         self._client = httpx.Client(timeout=10.0)
 
     @staticmethod
-    def key(token: str) -> str:
-        return hashlib.sha256(token.encode()).hexdigest()
+    def key(user: str, token: str, salt: str) -> str:
+        return hashlib.sha256(f"{user}|{token}|{salt}".encode()).hexdigest()
 
-    def sections_for(self, token: str) -> frozenset[int] | None:
-        """Secciones de música que puede ver este token, o None si no tiene acceso."""
-        if not token or len(token) > 512:
+    def user_for(self, user: str, token: str, salt: str) -> str | None:
+        """Nombre de usuario (en minúsculas) si el acceso es válido en Navidrome; si no, None."""
+        if not user or not token or not salt or max(len(user), len(token), len(salt)) > 256:
             return None
-        k = self.key(token)
+        k = self.key(user, token, salt)
         now = time.monotonic()
         with self._lock:
             hit = self._cache.get(k)
             if hit and hit[0] > now:
                 return hit[1]
-        sections = self._ask_plex(token)
+        result = user.lower() if self._ask_navidrome(user, token, salt) else None
         with self._lock:
-            ttl = self.ttl if sections is not None else self.negative_ttl
-            self._cache[k] = (now + ttl, sections)
+            ttl = self.ttl if result else self.negative_ttl
+            self._cache[k] = (now + ttl, result)
             if len(self._cache) > 5000:  # limpieza sencilla
                 self._cache = {kk: v for kk, v in self._cache.items() if v[0] > now}
-        return sections
+        return result
 
-    def _ask_plex(self, token: str) -> frozenset[int] | None:
+    def _ask_navidrome(self, user: str, token: str, salt: str) -> bool:
         try:
             resp = self._client.get(
-                f"{self.plex_url}/library/sections",
-                headers={"Accept": "application/json", "X-Plex-Token": token},
+                f"{self.navidrome_url}/rest/ping.view",
+                params={"u": user, "t": token, "s": salt, "v": "1.16.1", "c": "SonoraServer", "f": "json"},
             )
-        except httpx.HTTPError:
-            log.warning("No se pudo contactar con Plex para validar un acceso")
-            return None
-        if resp.status_code != 200:
-            return None
-        dirs = resp.json().get("MediaContainer", {}).get("Directory", []) or []
-        return frozenset(int(d["key"]) for d in dirs if d.get("type") == "artist")
+            body = resp.json().get("subsonic-response", {})
+        except (httpx.HTTPError, ValueError):
+            log.warning("No se pudo contactar con Navidrome para validar un acceso")
+            return False
+        return body.get("status") == "ok"
 
 
 class RateLimiter:

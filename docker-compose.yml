@@ -1,6 +1,6 @@
-# Sonora Server: índice de búsqueda para la app Sonora.
-# En Portainer: Stacks → Add stack → pega este archivo (o apúntalo al repositorio)
-# y define PLEX_URL y PLEX_TOKEN en «Environment variables».
+# Sonora Server: búsqueda en Last.fm y lista de deseos para la app Sonora, junto a tu Navidrome.
+# Publícalo en  <tu-navidrome>-api.<dominio>  (p. ej. navidrome.ejemplo.com → navidrome-api.ejemplo.com;
+# si Navidrome está en el dominio principal ejemplo.com → sonora-api.ejemplo.com). La app lo busca ahí sola.
 
 services:
   sonora-server:
@@ -9,18 +9,15 @@ services:
     container_name: sonora-server
     restart: unless-stopped
     environment:
-      # Dirección de tu Plex vista DESDE el contenedor (no la pública).
-      # Ejemplos: http://plex:32400 (misma red de Docker) o http://192.168.1.10:32400
-      PLEX_URL: ${PLEX_URL}
-      # Token de la cuenta dueña del servidor Plex. Solo se usa para leer la biblioteca.
-      PLEX_TOKEN: ${PLEX_TOKEN}
-      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-30}
-      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-600}
+      # Dirección de tu Navidrome vista DESDE el contenedor, p. ej. http://192.168.1.10:4533
+      NAVIDROME_URL: ${NAVIDROME_URL}
+      # Clave de API de Last.fm (gratis en last.fm/api/account/create). Sin ella no hay búsqueda en Last.fm.
+      LASTFM_API_KEY: ${LASTFM_API_KEY:-}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - sonora-data:/data
     ports:
-      # Solo hace falta si tu proxy no está en la misma red de Docker.
       - "8095:8080"
     read_only: true
     tmpfs:

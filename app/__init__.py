@@ -1,3 +1,3 @@
-"""Sonora Server: índice de búsqueda de una biblioteca de música de Plex."""
+"""Sonora Server: servicio de la app Sonora junto a tu Navidrome (búsqueda en Last.fm y lista de deseos)."""
 
-__version__ = "0.1.0"
+__version__ = "2.0.0"
