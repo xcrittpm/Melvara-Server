@@ -1,6 +1,6 @@
-# Sonora Server
+# Melvara Server
 
-Servicio opcional que se instala junto a tu **Navidrome** para dar a la app Sonora:
+Servicio opcional que se instala junto a tu **Navidrome** para dar a la app Melvara:
 
 - **Last.fm sin claves para nadie**: con la clave de quien lo instala, todas las personas de tu Navidrome
   tienen la búsqueda en Last.fm, las listas de éxitos y pueden conectar su perfil de Last.fm (para apuntar lo
@@ -21,13 +21,13 @@ no da ningún dato.
 
 La app lo busca sola, sin configurar nada, en una dirección derivada de la de Navidrome:
 
-| Navidrome en | Sonora Server en |
+| Navidrome en | Melvara Server en |
 |---|---|
 | `ejemplo.com` (dominio principal) | `sonora-api.ejemplo.com` |
 | `musica.ejemplo.com` (subdominio) | `musica-api.ejemplo.com` |
 | una IP, `localhost` o un nombre sin dominio | no disponible |
 
-Siempre por **https** y dentro de tu mismo dominio. Si en esa dirección no responde un Sonora Server, la app
+Siempre por **https** y dentro de tu mismo dominio. Si en esa dirección no responde un Melvara Server, la app
 no le envía nada.
 
 ## Instalar (Docker)

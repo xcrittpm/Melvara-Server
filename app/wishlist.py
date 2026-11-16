@@ -12,8 +12,8 @@ import time
 MAX_ITEMS_PER_USER = 5000
 MAX_FIELD = 300
 
-# Estado de cada deseo. Lo pone una aplicación externa con la ruta de servicio (p. ej. la Gramola, que lo
-# pide a SoulSync): pendiente → descargando → en la biblioteca; o no encontrada; o hecho a mano.
+# Estado de cada deseo. Lo pone una aplicación externa con la ruta de servicio:
+# pendiente → descargando → en la biblioteca; o no encontrada; o hecho a mano.
 STATUSES = ("pending", "downloading", "in_library", "not_found", "done")
 _COLS = "id, title, artist, album, year, added_at, status, status_note, status_at"
 

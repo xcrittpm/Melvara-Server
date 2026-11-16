@@ -1,6 +1,6 @@
-# API de Sonora Server
+# API de Melvara Server
 
-Llamadas HTTP de Sonora Server, en especial las de la **lista de deseos**. Todas las respuestas son JSON.
+Llamadas HTTP de Melvara Server, en especial las de la **lista de deseos**. Todas las respuestas son JSON.
 
 En los ejemplos, el servidor está en `https://musica-api.ejemplo.com` (Navidrome en `https://musica.ejemplo.com`;
 ver [dónde publicarlo](README.md#dónde-publicarlo)).
@@ -9,7 +9,7 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 
 | Método | Ruta | Acceso | Para qué |
 |---|---|---|---|
-| GET | `/api/v1/status` | público | Saber si hay un Sonora Server y qué tiene activado |
+| GET | `/api/v1/status` | público | Saber si hay un Melvara Server y qué tiene activado |
 | GET | `/api/v1/wishlist` | usuario de Navidrome | Ver tu lista de deseos |
 | POST | `/api/v1/wishlist` | usuario de Navidrome | Añadir una canción a tu lista |
 | DELETE | `/api/v1/wishlist/{id}` | usuario de Navidrome | Quitar una canción de tu lista |
@@ -30,19 +30,19 @@ curl https://musica-api.ejemplo.com/api/v1/status
 {"service": "sonora-api", "version": "2.1.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true}
 ```
 
-- `service`: siempre `sonora-api`. Si no sale esto, no es un Sonora Server.
+- `service`: siempre `sonora-api`. Si no sale esto, no es un Melvara Server.
 - `lastfm`: hay búsqueda en Last.fm y listas de éxitos. `lastfmAuth`: se puede conectar el perfil de Last.fm.
 - `serviceApi`: la ruta de servicio está activa.
 
-## Acceso de usuario (cabeceras `X-Sonora-*`)
+## Acceso de usuario (cabeceras `X-Melvara-*`)
 
 Las rutas de usuario usan **el mismo acceso que Navidrome** (el de la API de Subsonic), en tres cabeceras:
 
 | Cabecera | Valor |
 |---|---|
-| `X-Sonora-User` | usuario de Navidrome |
-| `X-Sonora-Salt` | un texto al azar (la «sal») |
-| `X-Sonora-Token` | `md5(contraseña + sal)`, en hexadecimal |
+| `X-Melvara-User` | usuario de Navidrome |
+| `X-Melvara-Salt` | un texto al azar (la «sal») |
+| `X-Melvara-Token` | `md5(contraseña + sal)`, en hexadecimal |
 
 La contraseña nunca viaja. El servidor comprueba el acceso con el propio Navidrome y recuerda el resultado
 unos minutos (sin guardar el token). Cada persona solo ve y cambia **su** lista.
@@ -52,7 +52,7 @@ Ejemplo para preparar las cabeceras en la terminal:
 ```bash
 U=ana; P='su-contraseña'; S=$(openssl rand -hex 6)
 T=$(printf '%s' "$P$S" | md5)          # en Linux: md5sum | cut -d' ' -f1
-H=(-H "X-Sonora-User: $U" -H "X-Sonora-Salt: $S" -H "X-Sonora-Token: $T")
+H=(-H "X-Melvara-User: $U" -H "X-Melvara-Salt: $S" -H "X-Melvara-Token: $T")
 ```
 
 ### Ver tu lista
@@ -158,7 +158,7 @@ curl -H "Authorization: Bearer $SONORA_SERVICE_TOKEN" \
   {"id": 12, "user": "ana", "title": "Nicole Kidman", "artist": "ADÉLA", "album": null, "year": null, "addedAt": 1794836000,
    "status": "pending", "statusNote": null, "statusAt": null},
   {"id": 13, "user": "ana", "title": "Housewife", "artist": "Tate McRae", "album": "So Close to What", "year": 2025, "addedAt": 1794836100,
-   "status": "downloading", "statusNote": "Pedida en la Gramola", "statusAt": 1794836400}
+   "status": "downloading", "statusNote": "Pedida el 16/11/2026", "statusAt": 1794836400}
 ], "next": 13}
 ```
 
