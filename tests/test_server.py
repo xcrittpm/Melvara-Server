@@ -246,3 +246,38 @@ def test_base_de_datos_antigua_se_renombra():
         path = main._database(d)
         assert path.endswith("melvara.sqlite") and not os.path.exists(old)
         assert Wishlist(path).list("ana")[0]["title"] == "Tusa"
+
+
+def test_limpieza_de_la_busqueda_de_lastfm():
+    from app.lastfm import clean_search
+
+    def t(title, artist, listeners):
+        return {"title": title, "artist": artist, "listeners": listeners}
+
+    raw = [
+        t("tHe CuRe", "Olivia Rodrigo", 925018),
+        t("the cure • Olivia Rodrigo", "Anúncios limitados, com o apoio de", 6),
+        t("expectations", "Olivia Rodrigo", 641560),
+        t("the cure - performance video", "Olivia Rodrigo", 135103),
+        t("vampire", "Olivia Rodrigo", 1593533),
+    ]
+    out = clean_search("the cure olivia rodrigo", raw)
+    assert [(i["title"], i["artist"]) for i in out] == [("tHe CuRe", "Olivia Rodrigo")]
+
+    raw = [
+        t("tHe CuRe", "Olivia Rodrigo", 925018),
+        t("Lovesong", "The Cure", 897494),
+        t("Lovesong - Remastered", "The Cure", 787378),
+        t("Boys Don't Cry", "The Cure", 2507716),
+        t("Lullaby", "The Cure", 1056639),
+    ]
+    out = clean_search("the cure", raw)
+    titles = [i["title"] for i in out]
+    assert titles[0] == "tHe CuRe"  # se llama como lo buscado
+    assert titles.count("Lovesong") == 1 and "Lovesong - Remastered" not in titles
+    assert "Lullaby" in titles  # «lullaby» no es basura si es el título de verdad
+    assert titles[1] == "Boys Don't Cry"  # luego, por oyentes
+
+    # Si nada tiene todas las palabras, no se queda vacío: se dan las limpias.
+    out = clean_search("cancion inventada xyz", [t("Otra", "Alguien", 5000)])
+    assert len(out) == 1

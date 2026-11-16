@@ -27,7 +27,7 @@ curl https://musica-api.ejemplo.com/api/v1/status
 ```
 
 ```json
-{"service": "melvara-api", "version": "2.3.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true}
+{"service": "melvara-api", "version": "2.4.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true}
 ```
 
 - `service`: siempre `melvara-api` (hasta la 2.2, `sonora-api`). Si no sale esto, no es un Melvara Server.

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
+import unicodedata
 
 import httpx
 
@@ -18,6 +20,70 @@ API = "https://ws.audioscrobbler.com/2.0/"
 
 # Únicos métodos de Last.fm que la app puede pedir firmar (iniciar sesión y escuchas).
 SIGNED_METHODS = {"auth.getMobileSession", "track.updateNowPlaying", "track.scrobble", "track.love", "track.unlove"}
+
+
+# ------------------------------------------------------------------ limpieza de la búsqueda
+#
+# track.search de Last.fm busca en el título y también en el artista, así que «the cure olivia rodrigo»
+# devuelve todas las canciones de Olivia Rodrigo, y mezcla vídeos, karaokes y subidas de cuentas raras
+# con pocos oyentes. Se limpia antes de dárselo a la app.
+
+# Si aparecen en el título (y no en lo buscado), no es la canción sino otra cosa.
+JUNK = ("video", "karaoke", "in the style of", "originally performed", "made famous", "tribute",
+        "8 bit", "nightcore", "sped up", "slowed", "instrumental version", "backing track", "lyrics")
+# «Canción - Remastered 2011», «Canción (2010 Remaster)»… es la misma canción.
+VERSION = re.compile(r"\s*(?:-\s*|[(\[])\s*(?:\d{4}\s+)?(?:remaster(?:ed)?|remasterizad[oa])(?:\s+\d{4})?(?:\s+version)?\s*[)\]]?\s*$",
+                     re.IGNORECASE)
+
+
+def _words(text: str) -> list[str]:
+    text = unicodedata.normalize("NFKD", text.lower())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return re.findall(r"[a-z0-9]+", text)
+
+
+def clean_search(query: str, items: list[dict], limit: int = 30) -> list[dict]:
+    """Quita lo que no es (otras canciones del artista, vídeos, karaokes, subidas raras), junta las
+    versiones remasterizadas y pone primero la canción que se llama como lo buscado."""
+    wanted = _words(query)
+    if not wanted:
+        return items[:limit]
+    wanted_text = " ".join(wanted)
+
+    def junk(item: dict) -> bool:
+        title = " ".join(_words(item["title"]))
+        if any(marker in title and marker not in wanted_text for marker in JUNK):
+            return True
+        # Subidas de cuentas que no son artistas («the cure • Olivia Rodrigo» de «Anúncios limitados…»).
+        return "•" in item["title"] or "•" in item["artist"]
+
+    candidates = [i for i in items if not junk(i)]
+    top = max((i["listeners"] for i in candidates), default=0)
+    candidates = [i for i in candidates if i["listeners"] >= 1000 or i["listeners"] >= top * 0.002]
+
+    # Todas las palabras buscadas tienen que estar en el título o en el artista.
+    def relevant(item: dict) -> bool:
+        have = set(_words(item["title"])) | set(_words(item["artist"]))
+        return all(w in have for w in wanted)
+
+    strict = [i for i in candidates if relevant(i)]
+    chosen = strict or candidates
+
+    # Una sola por canción: la versión con más oyentes.
+    best: dict[tuple[str, str], dict] = {}
+    for item in chosen:
+        key = (" ".join(_words(VERSION.sub("", item["title"]))), " ".join(_words(item["artist"])))
+        if key not in best or item["listeners"] > best[key]["listeners"]:
+            best[key] = item
+
+    def exact(item: dict) -> bool:
+        # El título es justo lo buscado (con o sin el nombre del artista).
+        title = _words(VERSION.sub("", item["title"]))
+        rest = [w for w in wanted if w not in set(_words(item["artist"]))]
+        return title == wanted or (bool(rest) and title == rest)
+
+    ordered = sorted(best.values(), key=lambda i: (not exact(i), -i["listeners"]))
+    return ordered[:limit]
 
 
 class LastFM:
@@ -67,7 +133,8 @@ class LastFM:
         return resp.json()
 
     async def search(self, query: str, limit: int = 30) -> list[dict]:
-        data = await self._call("track.search", track=query, limit=str(limit))
+        # Se piden más de las que se dan: la limpieza quita bastantes.
+        data = await self._call("track.search", track=query, limit=str(max(limit, 50)))
         items = data.get("results", {}).get("trackmatches", {}).get("track", []) or []
         out = []
         for t in items:
@@ -75,6 +142,7 @@ class LastFM:
             if name and artist:
                 out.append({"title": name, "artist": artist, "album": None, "year": None,
                             "listeners": int(t.get("listeners") or 0), "url": t.get("url")})
+        out = clean_search(query, out, limit)
         # El álbum solo viene al pedir cada canción: se pide para las primeras.
         for item in out[:10]:
             try:
