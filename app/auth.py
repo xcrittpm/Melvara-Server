@@ -15,7 +15,7 @@ from collections import deque
 
 import httpx
 
-log = logging.getLogger("sonora.auth")
+log = logging.getLogger("melvara.auth")
 
 
 class Auth:
@@ -53,7 +53,7 @@ class Auth:
         try:
             resp = self._client.get(
                 f"{self.navidrome_url}/rest/ping.view",
-                params={"u": user, "t": token, "s": salt, "v": "1.16.1", "c": "SonoraServer", "f": "json"},
+                params={"u": user, "t": token, "s": salt, "v": "1.16.1", "c": "MelvaraServer", "f": "json"},
             )
             body = resp.json().get("subsonic-response", {})
         except (httpx.HTTPError, ValueError):

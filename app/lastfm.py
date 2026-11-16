@@ -12,7 +12,7 @@ import logging
 
 import httpx
 
-log = logging.getLogger("sonora.lastfm")
+log = logging.getLogger("melvara.lastfm")
 API = "https://ws.audioscrobbler.com/2.0/"
 
 
@@ -24,7 +24,7 @@ class LastFM:
     def __init__(self, api_key: str, secret: str = ""):
         self.api_key = api_key
         self.secret = secret
-        self._client = httpx.AsyncClient(timeout=15.0, headers={"User-Agent": "SonoraServer/2"})
+        self._client = httpx.AsyncClient(timeout=15.0, headers={"User-Agent": "MelvaraServer/2"})
 
     @property
     def enabled(self) -> bool:

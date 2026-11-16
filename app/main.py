@@ -1,4 +1,4 @@
-"""API HTTP de Sonora Server."""
+"""API HTTP de Melvara Server."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-log = logging.getLogger("sonora")
+log = logging.getLogger("melvara")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 SECURITY_HEADERS = {
@@ -48,6 +48,18 @@ def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: Last
     state.service_token = service_token.strip()
 
 
+def _database(data_dir: str) -> str:
+    """melvara.sqlite. Antes se llamaba sonora.sqlite: si solo está la vieja, se renombra."""
+    path = os.path.join(data_dir, "melvara.sqlite")
+    old = os.path.join(data_dir, "sonora.sqlite")
+    if not os.path.exists(path) and os.path.exists(old):
+        for suffix in ("", "-wal", "-shm"):
+            if os.path.exists(old + suffix):
+                os.replace(old + suffix, path + suffix)
+        log.info("Base de datos renombrada: sonora.sqlite → melvara.sqlite")
+    return path
+
+
 @asynccontextmanager
 async def lifespan(app):
     if not getattr(state, "wishlist", None):  # en las pruebas se configura a mano
@@ -56,14 +68,14 @@ async def lifespan(app):
         configure(
             Auth(os.environ["NAVIDROME_URL"]),
             RateLimiter(int(os.environ.get("RATE_LIMIT_PER_MINUTE", "120"))),
-            Wishlist(os.path.join(data_dir, "sonora.sqlite")),
+            Wishlist(_database(data_dir)),
             LastFM(os.environ.get("LASTFM_API_KEY", ""), os.environ.get("LASTFM_SHARED_SECRET", "")),
             os.environ.get("SERVICE_TOKEN", ""),
         )
         if state.service_token and len(state.service_token) < 32:
             log.warning("SERVICE_TOKEN tiene menos de 32 caracteres: la ruta de servicio queda desactivada")
             state.service_token = ""
-        log.info("Sonora Server %s listo", __version__)
+        log.info("Melvara Server %s listo", __version__)
     yield
 
 
@@ -79,7 +91,8 @@ def protected(handler):
 
     async def endpoint(request: Request):
         h = request.headers
-        user, token, salt = h.get("x-sonora-user", ""), h.get("x-sonora-token", ""), h.get("x-sonora-salt", "")
+        # X-Melvara-*; las versiones anteriores de la app mandan X-Sonora-* (se aceptan las dos).
+        user, token, salt = (h.get(f"x-melvara-{k}") or h.get(f"x-sonora-{k}", "") for k in ("user", "token", "salt"))
         client = request.client.host if request.client else "?"
         if not state.limiter.allow(f"u:{user.lower()}" if user else f"ip:{client}"):
             return _error(429, "Demasiadas peticiones")
@@ -107,8 +120,8 @@ async def health(request: Request):
 
 
 async def status(request: Request):
-    # Público (sin datos): la app lo usa para saber que aquí hay un Sonora Server.
-    return JSONResponse({"service": "sonora-api", "version": __version__, "lastfm": state.lastfm.enabled,
+    # Público (sin datos): la app lo usa para saber que aquí hay un Melvara Server.
+    return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.lastfm.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token)},
                         headers=SECURITY_HEADERS)
 

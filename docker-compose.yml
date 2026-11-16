@@ -1,12 +1,12 @@
-# Sonora Server: búsqueda en Last.fm y lista de deseos para la app Sonora, junto a tu Navidrome.
+# Melvara Server: búsqueda en Last.fm y lista de deseos para la app Melvara, junto a tu Navidrome.
 # Publícalo en  <tu-navidrome>-api.<dominio>  (p. ej. navidrome.ejemplo.com → navidrome-api.ejemplo.com;
-# si Navidrome está en el dominio principal ejemplo.com → sonora-api.ejemplo.com). La app lo busca ahí sola.
+# si Navidrome está en el dominio principal ejemplo.com → melvara-api.ejemplo.com). La app lo busca ahí sola.
 
 services:
-  sonora-server:
+  melvara-server:
     build: .
-    image: sonora-server:latest
-    container_name: sonora-server
+    image: melvara-server:latest
+    container_name: melvara-server
     restart: unless-stopped
     environment:
       # Dirección de tu Navidrome vista DESDE el contenedor, p. ej. http://192.168.1.10:4533
@@ -21,7 +21,7 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      - sonora-data:/data
+      - melvara-data:/data
     ports:
       - "8095:8080"
     read_only: true
@@ -33,4 +33,4 @@ services:
       - ALL
 
 volumes:
-  sonora-data:
+  melvara-data:

@@ -23,7 +23,7 @@ La app lo busca sola, sin configurar nada, en una dirección derivada de la de N
 
 | Navidrome en | Melvara Server en |
 |---|---|
-| `ejemplo.com` (dominio principal) | `sonora-api.ejemplo.com` |
+| `ejemplo.com` (dominio principal) | `melvara-api.ejemplo.com` |
 | `musica.ejemplo.com` (subdominio) | `musica-api.ejemplo.com` |
 | una IP, `localhost` o un nombre sin dominio | no disponible |
 
@@ -39,7 +39,7 @@ no le envía nada.
      secreto no se puede conectar el perfil de Last.fm desde la app.
 2. `docker compose up -d --build`
 3. Publica el puerto 8095 con tu proxy (Caddy, Nginx…) en la dirección de la tabla, con https.
-4. Comprueba: `curl https://<tu-dirección>/api/v1/status` → `{"service":"sonora-api",…}`.
+4. Comprueba: `curl https://<tu-dirección>/api/v1/status` → `{"service":"melvara-api",…}`.
 
 ## API
 

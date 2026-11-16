@@ -4,15 +4,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DATA_DIR=/data
 
-RUN useradd --system --uid 10001 --no-create-home sonora \
-    && mkdir -p /data && chown sonora /data
+RUN useradd --system --uid 10001 --no-create-home melvara \
+    && mkdir -p /data && chown melvara /data
 
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
-USER sonora
+USER melvara
 VOLUME ["/data"]
 EXPOSE 8080
 

@@ -27,10 +27,10 @@ curl https://musica-api.ejemplo.com/api/v1/status
 ```
 
 ```json
-{"service": "sonora-api", "version": "2.1.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true}
+{"service": "melvara-api", "version": "2.3.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true}
 ```
 
-- `service`: siempre `sonora-api`. Si no sale esto, no es un Melvara Server.
+- `service`: siempre `melvara-api` (hasta la 2.2, `sonora-api`). Si no sale esto, no es un Melvara Server.
 - `lastfm`: hay búsqueda en Last.fm y listas de éxitos. `lastfmAuth`: se puede conectar el perfil de Last.fm.
 - `serviceApi`: la ruta de servicio está activa.
 
@@ -43,6 +43,8 @@ Las rutas de usuario usan **el mismo acceso que Navidrome** (el de la API de Sub
 | `X-Melvara-User` | usuario de Navidrome |
 | `X-Melvara-Salt` | un texto al azar (la «sal») |
 | `X-Melvara-Token` | `md5(contraseña + sal)`, en hexadecimal |
+
+Las versiones anteriores de la app mandan `X-Sonora-User`, `X-Sonora-Salt` y `X-Sonora-Token`: también se aceptan.
 
 La contraseña nunca viaja. El servidor comprueba el acceso con el propio Navidrome y recuerda el resultado
 unos minutos (sin guardar el token). Cada persona solo ve y cambia **su** lista.
@@ -143,14 +145,14 @@ el código, y el servidor no lo escribe en los registros. La otra aplicación ne
 
 | Variable | Ejemplo |
 |---|---|
-| `SONORA_URL` | `https://musica-api.ejemplo.com` |
-| `SONORA_SERVICE_TOKEN` | el mismo valor que `SERVICE_TOKEN` |
+| `MELVARA_URL` | `https://musica-api.ejemplo.com` |
+| `MELVARA_SERVICE_TOKEN` | el mismo valor que `SERVICE_TOKEN` |
 
 ### Leer por páginas
 
 ```bash
-curl -H "Authorization: Bearer $SONORA_SERVICE_TOKEN" \
-  "$SONORA_URL/api/v1/service/wishlist?after=0&limit=200"
+curl -H "Authorization: Bearer $MELVARA_SERVICE_TOKEN" \
+  "$MELVARA_URL/api/v1/service/wishlist?after=0&limit=200"
 ```
 
 ```json
@@ -177,8 +179,8 @@ import json, os, urllib.request
 def todos_los_deseos(after=0):
     while True:
         req = urllib.request.Request(
-            f"{os.environ['SONORA_URL']}/api/v1/service/wishlist?after={after}&limit=500",
-            headers={"Authorization": f"Bearer {os.environ['SONORA_SERVICE_TOKEN']}"})
+            f"{os.environ['MELVARA_URL']}/api/v1/service/wishlist?after={after}&limit=500",
+            headers={"Authorization": f"Bearer {os.environ['MELVARA_SERVICE_TOKEN']}"})
         page = json.load(urllib.request.urlopen(req, timeout=30))
         yield from page["items"]
         if page["next"] is None:
@@ -192,9 +194,9 @@ for d in todos_los_deseos():
 ### Cambiar el estado de un deseo
 
 ```bash
-curl -X PATCH -H "Authorization: Bearer $SONORA_SERVICE_TOKEN" -H "Content-Type: application/json" \
+curl -X PATCH -H "Authorization: Bearer $MELVARA_SERVICE_TOKEN" -H "Content-Type: application/json" \
   -d '{"status": "in_library", "note": "En la biblioteca desde el 16/11/2026"}' \
-  "$SONORA_URL/api/v1/service/wishlist/13"
+  "$MELVARA_URL/api/v1/service/wishlist/13"
 ```
 
 ```json

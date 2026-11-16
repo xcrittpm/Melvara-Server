@@ -1,4 +1,4 @@
-"""Pruebas de Sonora Server (sin red: Navidrome y Last.fm se simulan)."""
+"""Pruebas de Melvara Server (sin red: Navidrome y Last.fm se simulan)."""
 
 import os
 import sys
@@ -45,13 +45,13 @@ def make_client(lastfm_key="clave", per_minute=100, service_token=""):
 
 
 def headers(user="ana", token="bueno"):
-    return {"X-Sonora-User": user, "X-Sonora-Token": token, "X-Sonora-Salt": "abc"}
+    return {"X-Melvara-User": user, "X-Melvara-Token": token, "X-Melvara-Salt": "abc"}
 
 
 def test_status_is_public():
     c = make_client()
     r = c.get("/api/v1/status")
-    assert r.status_code == 200 and r.json()["service"] == "sonora-api" and r.json()["lastfm"] is True
+    assert r.status_code == 200 and r.json()["service"] == "melvara-api" and r.json()["lastfm"] is True
 
 
 def test_needs_valid_navidrome_access():
@@ -228,3 +228,21 @@ def test_old_database_gets_status_columns():
     w = Wishlist(path)
     assert w.list("ana")[0]["status"] == "pending"
     assert w.set_status(1, "downloading", None)["status"] == "downloading"
+
+
+def test_cabeceras_antiguas_x_sonora():
+    """Las versiones anteriores de la app mandan X-Sonora-*: siguen valiendo."""
+    c = make_client()
+    old = {"X-Sonora-User": "ana", "X-Sonora-Token": "bueno", "X-Sonora-Salt": "abc"}
+    assert c.get("/api/v1/wishlist", headers=old).status_code == 200
+    bad = {"X-Sonora-User": "ana", "X-Sonora-Token": "malo", "X-Sonora-Salt": "abc"}
+    assert c.get("/api/v1/wishlist", headers=bad).status_code == 401
+
+
+def test_base_de_datos_antigua_se_renombra():
+    with tempfile.TemporaryDirectory() as d:
+        old = os.path.join(d, "sonora.sqlite")
+        Wishlist(old).add("ana", "Tusa", "KAROL G", None, None)
+        path = main._database(d)
+        assert path.endswith("melvara.sqlite") and not os.path.exists(old)
+        assert Wishlist(path).list("ana")[0]["title"] == "Tusa"
