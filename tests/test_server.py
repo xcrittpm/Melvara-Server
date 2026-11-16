@@ -182,3 +182,49 @@ def test_wishlist_batch():
     assert len(listed) == 2 and any(i["year"] == 2019 for i in listed)
     assert c.post("/api/v1/wishlist", headers=headers(), json={"items": []}).status_code == 400
     assert c.post("/api/v1/wishlist", headers=headers(), json={"items": [{}] * 501}).status_code == 400
+
+
+def test_service_sets_status_and_the_app_sees_it():
+    c = make_client(service_token=SERVICE)
+    auth = {"Authorization": f"Bearer {SERVICE}"}
+    wid = c.post("/api/v1/wishlist", json={"title": "Uno", "artist": "X"}, headers=headers("ana")).json()["item"]["id"]
+    mine = c.get("/api/v1/wishlist", headers=headers("ana")).json()["items"][0]
+    assert mine["status"] == "pending" and mine["statusNote"] is None and mine["statusAt"] is None
+    url = f"/api/v1/service/wishlist/{wid}"
+    # Pide el token, como la lectura
+    assert c.patch(url, json={"status": "in_library"}).status_code == 401
+    assert c.patch(url, json={"status": "in_library"}, headers={"Authorization": "Bearer malo"}).status_code == 401
+    # Valores no válidos
+    for bad in [{}, {"status": "cosa"}, {"status": 3}, []]:
+        assert c.patch(url, json=bad, headers=auth).status_code == 400
+    assert c.patch("/api/v1/service/wishlist/9999", json={"status": "done"}, headers=auth).status_code == 404
+    r = c.patch(url, json={"status": "in_library", "note": "En la biblioteca desde el 16/11/2026"}, headers=auth)
+    assert r.status_code == 200
+    item = r.json()["item"]
+    assert item["status"] == "in_library" and item["user"] == "ana" and item["statusAt"] > 0
+    mine = c.get("/api/v1/wishlist", headers=headers("ana")).json()["items"][0]
+    assert mine["status"] == "in_library" and mine["statusNote"].startswith("En la biblioteca")
+    listed = c.get("/api/v1/service/wishlist", headers=auth).json()["items"][0]
+    assert listed["status"] == "in_library"
+    # Volver a añadir la misma canción no le quita el estado
+    c.post("/api/v1/wishlist", json={"title": "Uno", "artist": "X", "album": "Disco"}, headers=headers("ana"))
+    assert c.get("/api/v1/wishlist", headers=headers("ana")).json()["items"][0]["status"] == "in_library"
+    # Sin token configurado, la ruta no existe
+    c2 = make_client()
+    assert c2.patch(url, json={"status": "done"}, headers=auth).status_code == 404
+
+
+def test_old_database_gets_status_columns():
+    import sqlite3
+
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "vieja.sqlite")
+    db = sqlite3.connect(path)
+    db.execute("""CREATE TABLE wishes (id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, title TEXT NOT NULL,
+                  artist TEXT NOT NULL, album TEXT, year INTEGER, added_at INTEGER NOT NULL, UNIQUE(user, title, artist))""")
+    db.execute("INSERT INTO wishes (user, title, artist, added_at) VALUES ('ana', 'Uno', 'X', 1)")
+    db.commit()
+    db.close()
+    w = Wishlist(path)
+    assert w.list("ana")[0]["status"] == "pending"
+    assert w.set_status(1, "downloading", None)["status"] == "downloading"

@@ -47,8 +47,8 @@ Todas las llamadas, con ejemplos (lista de deseos de cada persona y ruta de serv
 
 ## Ruta de servicio (opcional, para otras aplicaciones)
 
-Con `SERVICE_TOKEN` (32 caracteres o más) se activa una ruta de **solo lectura** con los deseos de todos los
-usuarios, por páginas:
+Con `SERVICE_TOKEN` (32 caracteres o más) se activa una ruta con los deseos de todos los usuarios, por páginas,
+y otra para marcar cómo va cada uno:
 
 ```
 GET /api/v1/service/wishlist?after=<id>&limit=<n>
@@ -56,11 +56,14 @@ Authorization: Bearer <SERVICE_TOKEN>
 ```
 
 - `after` ≥ 0 (por defecto 0); `limit` de 1 a 500 (por defecto 200).
-- Devuelve `{"items": [{"id", "user", "title", "artist", "album", "year", "addedAt"}], "next": <último id o null>}`,
-  ordenado por `id`. Para seguir, pide la siguiente página con `after=next`.
+- Devuelve `{"items": [{"id", "user", "title", "artist", "album", "year", "addedAt", "status", "statusNote",
+  "statusAt"}], "next": <último id o null>}`, ordenado por `id`. Para seguir, pide la siguiente página con
+  `after=next`.
+- `PATCH /api/v1/service/wishlist/{id}` con `{"status": "pending"|"downloading"|"in_library"|"not_found"|"done",
+  "note": "…"}` cambia el estado del deseo. La app lo recibe en su lista (`status`, `statusNote`, `statusAt`).
 - Sin token o con uno incorrecto: 401. Sin `SERVICE_TOKEN` configurado, la ruta no existe (404).
 - `/api/v1/status` indica `"serviceApi": true` cuando está activa.
-- Detalles y ejemplo para leerlo todo: [API.md](API.md#ruta-de-servicio-las-listas-de-todos-solo-lectura).
+- Detalles y ejemplo para leerlo todo: [API.md](API.md#ruta-de-servicio-las-listas-de-todos).
 
 ## Legal
 

@@ -12,6 +12,11 @@ import time
 MAX_ITEMS_PER_USER = 5000
 MAX_FIELD = 300
 
+# Estado de cada deseo. Lo pone una aplicación externa con la ruta de servicio (p. ej. la Gramola, que lo
+# pide a SoulSync): pendiente → descargando → en la biblioteca; o no encontrada; o hecho a mano.
+STATUSES = ("pending", "downloading", "in_library", "not_found", "done")
+_COLS = "id, title, artist, album, year, added_at, status, status_note, status_at"
+
 
 class Wishlist:
     def __init__(self, path: str):
@@ -31,16 +36,25 @@ class Wishlist:
                     UNIQUE(user, title, artist)
                 )"""
             )
+            # Bases anteriores a los estados: se añaden las columnas (todo queda «pending»)
+            cols = {r[1] for r in self._db.execute("PRAGMA table_info(wishes)")}
+            if "status" not in cols:
+                self._db.execute("ALTER TABLE wishes ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+            if "status_note" not in cols:
+                self._db.execute("ALTER TABLE wishes ADD COLUMN status_note TEXT")
+            if "status_at" not in cols:
+                self._db.execute("ALTER TABLE wishes ADD COLUMN status_at INTEGER")
             self._db.commit()
 
     @staticmethod
     def _row(r) -> dict:
-        return {"id": r[0], "title": r[1], "artist": r[2], "album": r[3], "year": r[4], "addedAt": r[5]}
+        return {"id": r[0], "title": r[1], "artist": r[2], "album": r[3], "year": r[4], "addedAt": r[5],
+                "status": r[6], "statusNote": r[7], "statusAt": r[8]}
 
     def list(self, user: str) -> list[dict]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT id, title, artist, album, year, added_at FROM wishes WHERE user = ? ORDER BY added_at DESC",
+                f"SELECT {_COLS} FROM wishes WHERE user = ? ORDER BY added_at DESC",
                 (user,),
             ).fetchall()
         return [self._row(r) for r in rows]
@@ -64,7 +78,7 @@ class Wishlist:
             )
             self._db.commit()
             r = self._db.execute(
-                "SELECT id, title, artist, album, year, added_at FROM wishes WHERE user = ? AND title = ? AND artist = ?",
+                f"SELECT {_COLS} FROM wishes WHERE user = ? AND title = ? AND artist = ?",
                 (user, title, artist),
             ).fetchone()
         return self._row(r)
@@ -73,11 +87,26 @@ class Wishlist:
         """Deseos de todos los usuarios con id > after, de menor a mayor (para la ruta de servicio)."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT id, user, title, artist, album, year, added_at FROM wishes WHERE id > ? ORDER BY id LIMIT ?",
+                f"SELECT {_COLS}, user FROM wishes WHERE id > ? ORDER BY id LIMIT ?",
                 (after, limit),
             ).fetchall()
-        return [{"id": r[0], "user": r[1], "title": r[2], "artist": r[3], "album": r[4], "year": r[5], "addedAt": r[6]}
-                for r in rows]
+        return [{**self._row(r), "user": r[9]} for r in rows]
+
+    def set_status(self, item_id: int, status: str, note: str | None) -> dict | None:
+        """Cambia el estado de un deseo (ruta de servicio). None si no existe. ValueError si no es válido."""
+        if status not in STATUSES:
+            raise ValueError(f"status debe ser uno de: {', '.join(STATUSES)}")
+        note = (note or "").strip()[:MAX_FIELD] or None
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE wishes SET status = ?, status_note = ?, status_at = ? WHERE id = ?",
+                (status, note, int(time.time()), item_id),
+            )
+            self._db.commit()
+            if cur.rowcount == 0:
+                return None
+            r = self._db.execute(f"SELECT {_COLS}, user FROM wishes WHERE id = ?", (item_id,)).fetchone()
+        return {**self._row(r), "user": r[9]}
 
     def remove(self, user: str, item_id: int) -> bool:
         with self._lock:

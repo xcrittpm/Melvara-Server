@@ -145,9 +145,8 @@ async def lastfm_call(request: Request, user: str):
     return await state.lastfm.signed(method, params)
 
 
-async def service_wishlist(request: Request):
-    """Solo lectura, para aplicaciones externas: los deseos de todos los usuarios, por páginas.
-    Protegida con SERVICE_TOKEN (cabecera Authorization: Bearer). Sin token configurado, no existe (404)."""
+def _service_denied(request: Request) -> JSONResponse | None:
+    """Ruta de servicio: existe solo con SERVICE_TOKEN, tiene su límite y pide el token (Bearer)."""
     if not state.service_token:
         return _error(404, "No encontrado")
     if not state.limiter.allow("service"):
@@ -156,6 +155,14 @@ async def service_wishlist(request: Request):
     given = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
     if not given or not hmac.compare_digest(given.encode(), state.service_token.encode()):
         return _error(401, "Token de servicio ausente o incorrecto")
+    return None
+
+
+async def service_wishlist(request: Request):
+    """Para aplicaciones externas: los deseos de todos los usuarios, por páginas, con su estado.
+    Protegida con SERVICE_TOKEN (cabecera Authorization: Bearer). Sin token configurado, no existe (404)."""
+    if (denied := _service_denied(request)) is not None:
+        return denied
     try:
         after = int(request.query_params.get("after", "0"))
         limit = int(request.query_params.get("limit", "200"))
@@ -165,6 +172,28 @@ async def service_wishlist(request: Request):
         return _error(400, "after debe ser ≥ 0 y limit estar entre 1 y 500")
     items = state.wishlist.all_after(after, limit)
     return JSONResponse({"items": items, "next": items[-1]["id"] if items else None}, headers=SECURITY_HEADERS)
+
+
+async def service_wishlist_item(request: Request):
+    """Cambia el estado de un deseo: PATCH {"status": "downloading"|"in_library"|…, "note": "…"} (con el token)."""
+    if (denied := _service_denied(request)) is not None:
+        return denied
+    try:
+        item_id = int(request.path_params["id"])
+        body = json.loads(await request.body() or b"{}")
+    except (ValueError, json.JSONDecodeError):
+        return _error(400, "Datos no válidos")
+    if not isinstance(body, dict) or not isinstance(body.get("status"), str):
+        return _error(400, "Falta status")
+    note = body.get("note")
+    try:
+        item = state.wishlist.set_status(item_id, body["status"], str(note) if note is not None else None)
+    except ValueError as e:
+        return _error(400, str(e))
+    if item is None:
+        return _error(404, "No encontrado")
+    log.info("Deseo %d: %s (ruta de servicio)", item_id, item["status"])
+    return JSONResponse({"item": item}, headers=SECURITY_HEADERS)
 
 
 async def wishlist(request: Request, user: str):
@@ -219,6 +248,7 @@ app = Starlette(
         Route("/api/v1/wishlist", protected(wishlist), methods=["GET", "POST"]),
         Route("/api/v1/wishlist/{id}", protected(wishlist_item), methods=["DELETE"]),
         Route("/api/v1/service/wishlist", service_wishlist, methods=["GET"]),
+        Route("/api/v1/service/wishlist/{id}", service_wishlist_item, methods=["PATCH"]),
     ],
     lifespan=lifespan,
 )

@@ -14,6 +14,7 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | POST | `/api/v1/wishlist` | usuario de Navidrome | Añadir una canción a tu lista |
 | DELETE | `/api/v1/wishlist/{id}` | usuario de Navidrome | Quitar una canción de tu lista |
 | GET | `/api/v1/service/wishlist` | token de servicio | Leer las listas de **todos** (otras aplicaciones) |
+| PATCH | `/api/v1/service/wishlist/{id}` | token de servicio | Cambiar el estado de un deseo (p. ej. «en la biblioteca») |
 | GET | `/api/v1/lastfm/search?q=` | usuario de Navidrome | Buscar canciones en Last.fm |
 | GET | `/api/v1/lastfm/charts?country=` | usuario de Navidrome | Listas de éxitos de Last.fm |
 | POST | `/api/v1/lastfm/call` | usuario de Navidrome | Llamada de Last.fm firmada por el servidor (usa la app) |
@@ -62,12 +63,25 @@ curl "${H[@]}" https://musica-api.ejemplo.com/api/v1/wishlist
 
 ```json
 {"items": [
-  {"id": 12, "title": "Nicole Kidman", "artist": "ADÉLA", "album": null, "year": null, "addedAt": 1794836000}
+  {"id": 12, "title": "Nicole Kidman", "artist": "ADÉLA", "album": null, "year": null, "addedAt": 1794836000,
+   "status": "in_library", "statusNote": "En la biblioteca desde el 16/11/2026", "statusAt": 1794840000}
 ]}
 ```
 
 De la más reciente a la más antigua. `album` y `year` pueden ser `null`. `addedAt` es la fecha en segundos
 (Unix).
+
+`status` dice cómo va cada deseo; lo pone otra aplicación con la ruta de servicio (ver más abajo):
+
+| `status` | Significa |
+|---|---|
+| `pending` | Pendiente (lo que tiene todo deseo nuevo) |
+| `downloading` | Pedida: se está consiguiendo |
+| `in_library` | Ya está en la biblioteca |
+| `not_found` | No se encuentra |
+| `done` | Dada por hecha a mano |
+
+`statusNote` (texto o `null`) lo explica y `statusAt` es cuándo cambió (segundos Unix o `null`).
 
 ### Añadir una canción
 
@@ -115,7 +129,7 @@ curl "${H[@]}" -X DELETE https://musica-api.ejemplo.com/api/v1/wishlist/13
 
 Si ese `id` no existe o es de otra persona: 404.
 
-## Ruta de servicio: las listas de todos (solo lectura)
+## Ruta de servicio: las listas de todos
 
 Para otra aplicación (por ejemplo, una que busque y consiga lo que la gente ha pedido). Se activa poniendo
 `SERVICE_TOKEN` en el `.env` del servidor, con 32 caracteres o más:
@@ -141,8 +155,10 @@ curl -H "Authorization: Bearer $SONORA_SERVICE_TOKEN" \
 
 ```json
 {"items": [
-  {"id": 12, "user": "ana", "title": "Nicole Kidman", "artist": "ADÉLA", "album": null, "year": null, "addedAt": 1794836000},
-  {"id": 13, "user": "ana", "title": "Housewife", "artist": "Tate McRae", "album": "So Close to What", "year": 2025, "addedAt": 1794836100}
+  {"id": 12, "user": "ana", "title": "Nicole Kidman", "artist": "ADÉLA", "album": null, "year": null, "addedAt": 1794836000,
+   "status": "pending", "statusNote": null, "statusAt": null},
+  {"id": 13, "user": "ana", "title": "Housewife", "artist": "Tate McRae", "album": "So Close to What", "year": 2025, "addedAt": 1794836100,
+   "status": "downloading", "statusNote": "Pedida en la Gramola", "statusAt": 1794836400}
 ], "next": 13}
 ```
 
@@ -172,6 +188,24 @@ def todos_los_deseos(after=0):
 for d in todos_los_deseos():
     print(d["user"], "-", d["artist"], "-", d["title"])
 ```
+
+### Cambiar el estado de un deseo
+
+```bash
+curl -X PATCH -H "Authorization: Bearer $SONORA_SERVICE_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status": "in_library", "note": "En la biblioteca desde el 16/11/2026"}' \
+  "$SONORA_URL/api/v1/service/wishlist/13"
+```
+
+```json
+{"item": {"id": 13, "user": "ana", "title": "Housewife", "artist": "Tate McRae", "album": "So Close to What",
+          "year": 2025, "addedAt": 1794836100, "status": "in_library",
+          "statusNote": "En la biblioteca desde el 16/11/2026", "statusAt": 1794840000}}
+```
+
+- `status`: `pending`, `downloading`, `in_library`, `not_found` o `done`. `note` es opcional (hasta 300
+  caracteres).
+- 404 si ese deseo ya no existe (la persona lo quitó). Volver a añadir la misma canción no le quita el estado.
 
 ## Errores
 
