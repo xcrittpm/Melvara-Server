@@ -41,6 +41,10 @@ no le envía nada.
 3. Publica el puerto 8095 con tu proxy (Caddy, Nginx…) en la dirección de la tabla, con https.
 4. Comprueba: `curl https://<tu-dirección>/api/v1/status` → `{"service":"sonora-api",…}`.
 
+## API
+
+Todas las llamadas, con ejemplos (lista de deseos de cada persona y ruta de servicio): [API.md](API.md).
+
 ## Ruta de servicio (opcional, para otras aplicaciones)
 
 Con `SERVICE_TOKEN` (32 caracteres o más) se activa una ruta de **solo lectura** con los deseos de todos los
@@ -56,6 +60,7 @@ Authorization: Bearer <SERVICE_TOKEN>
   ordenado por `id`. Para seguir, pide la siguiente página con `after=next`.
 - Sin token o con uno incorrecto: 401. Sin `SERVICE_TOKEN` configurado, la ruta no existe (404).
 - `/api/v1/status` indica `"serviceApi": true` cuando está activa.
+- Detalles y ejemplo para leerlo todo: [API.md](API.md#ruta-de-servicio-las-listas-de-todos-solo-lectura).
 
 ## Legal
 
