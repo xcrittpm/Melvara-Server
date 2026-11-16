@@ -67,6 +67,9 @@ async def lifespan(app):
     yield
 
 
+MAX_BATCH = 500
+
+
 def _error(status: int, message: str) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status, headers=SECURITY_HEADERS)
 
@@ -171,10 +174,31 @@ async def wishlist(request: Request, user: str):
         body = json.loads(await request.body() or b"{}")
     except json.JSONDecodeError:
         raise ValueError("Datos no válidos")
-    year = body.get("year")
-    item = state.wishlist.add(user, str(body.get("title", "")), str(body.get("artist", "")),
-                              body.get("album"), int(year) if isinstance(year, int) else None)
-    return {"item": item}
+    if not isinstance(body, dict):
+        raise ValueError("Datos no válidos")
+
+    def add(entry: dict) -> dict:
+        year = entry.get("year")
+        album = entry.get("album")
+        return state.wishlist.add(user, str(entry.get("title", "")), str(entry.get("artist", "")),
+                                  str(album) if album is not None else None, year if isinstance(year, int) else None)
+
+    # Varias de una vez (p. ej. las no encontradas al importar): {"items": [{title, artist, album?, year?}, …]}.
+    if "items" in body:
+        entries = body["items"]
+        if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_BATCH:
+            raise ValueError(f"items debe ser una lista de 1 a {MAX_BATCH} canciones")
+        items, skipped = [], 0
+        for entry in entries:
+            try:
+                items.append(add(entry if isinstance(entry, dict) else {}))
+            except ValueError as e:
+                if str(e) == "La lista está llena":
+                    skipped += len(entries) - len(items) - skipped
+                    break
+                skipped += 1
+        return {"items": items, "skipped": skipped}
+    return {"item": add(body)}
 
 
 async def wishlist_item(request: Request, user: str):

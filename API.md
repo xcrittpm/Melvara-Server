@@ -26,7 +26,7 @@ curl https://musica-api.ejemplo.com/api/v1/status
 ```
 
 ```json
-{"service": "sonora-api", "version": "2.0.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true}
+{"service": "sonora-api", "version": "2.1.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true}
 ```
 
 - `service`: siempre `sonora-api`. Si no sale esto, no es un Sonora Server.
@@ -85,6 +85,23 @@ curl "${H[@]}" -X POST -H 'Content-Type: application/json' \
 - Si la canción (mismo título y artista) ya estaba, no se duplica: se devuelve la que había, completando
   álbum y año si faltaban.
 - Hasta 5000 canciones por persona; cada texto, hasta 300 caracteres.
+
+### Añadir varias de una vez
+
+Igual, pero con `items` (de 1 a 500 canciones por petición). Cuenta como una sola petición para el límite por
+minuto; la app lo usa para guardar las no encontradas al importar.
+
+```bash
+curl "${H[@]}" -X POST -H 'Content-Type: application/json' \
+  -d '{"items": [{"title": "Housewife", "artist": "Tate McRae"}, {"title": "90%", "artist": "C Marí", "album": "Sempre Cor (Deluxe)"}]}' \
+  https://musica-api.ejemplo.com/api/v1/wishlist
+```
+
+```json
+{"items": [{"id": 13, "title": "Housewife", …}, {"id": 14, "title": "90%", …}], "skipped": 0}
+```
+
+`skipped`: las que no se pudieron guardar (sin título o artista, o porque la lista se llenó).
 
 ### Quitar una canción
 

@@ -169,3 +169,16 @@ def test_service_route_reads_everyone_paged():
     assert r.headers["cache-control"] == "no-store" and r.headers["x-content-type-options"] == "nosniff"
     # Solo lectura.
     assert c.post("/api/v1/service/wishlist", headers=auth).status_code == 405
+
+
+def test_wishlist_batch():
+    c = make_client()
+    songs = [{"title": "Tusa", "artist": "KAROL G"}, {"title": "90%", "artist": "C Marí", "album": "Sempre Cor (Deluxe)"},
+             {"title": "", "artist": "Nadie"}, "no es un objeto", {"title": "Tusa", "artist": "KAROL G", "year": 2019}]
+    r = c.post("/api/v1/wishlist", headers=headers(), json={"items": songs})
+    assert r.status_code == 200
+    assert r.json()["skipped"] == 2 and len(r.json()["items"]) == 3
+    listed = c.get("/api/v1/wishlist", headers=headers()).json()["items"]
+    assert len(listed) == 2 and any(i["year"] == 2019 for i in listed)
+    assert c.post("/api/v1/wishlist", headers=headers(), json={"items": []}).status_code == 400
+    assert c.post("/api/v1/wishlist", headers=headers(), json={"items": [{}] * 501}).status_code == 400
