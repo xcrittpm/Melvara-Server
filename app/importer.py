@@ -66,7 +66,8 @@ class Navidrome:
     def __init__(self, base: str, user: str, token: str, salt: str, transport: httpx.AsyncBaseTransport | None = None):
         self.base = base.rstrip("/")
         self.auth = {"u": user, "t": token, "s": salt, "v": "1.16.1", "c": "MelvaraServer", "f": "json"}
-        self.client = httpx.AsyncClient(timeout=60.0, transport=transport)
+        # 45 s por petición: una búsqueda que tarda más se da por perdida (y se reintenta una vez).
+        self.client = httpx.AsyncClient(timeout=45.0, transport=transport)
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -267,8 +268,9 @@ class ImportJobs:
             self._update(job_id, status="cancelled")
             raise
         except Exception as e:  # noqa: BLE001 (cualquier fallo se cuenta en la app)
-            log.warning("Importación %d: %s", job_id, e)
-            self._update(job_id, status="failed", error=str(e)[:300])
+            message = str(e) or type(e).__name__
+            log.warning("Importación %d falló: %s", job_id, message)
+            self._update(job_id, status="failed", error=message[:300])
         finally:
             await nd.close()
             self._tasks.pop(job_id, None)
@@ -281,10 +283,33 @@ class ImportJobs:
         have = set(await nd.playlist_ids(library_id)) if library_id else set()
         added = 0
         sem = asyncio.Semaphore(CONCURRENCY)
+        progress = {"done": 0, "saved": 0.0}
+
+        failures = {"row": 0, "total": 0}
 
         async def one(song: dict) -> None:
             async with sem:
-                matches[song["key"]] = await find_track(nd, song)
+                # Una canción que falla (p. ej. Navidrome tarda demasiado con un título raro) no para la importación:
+                # se reintenta una vez y, si no, cuenta como no encontrada. Solo si fallan muchas seguidas
+                # (Navidrome caído), se para.
+                for attempt in (1, 2):
+                    try:
+                        matches[song["key"]] = await find_track(nd, song)
+                        failures["row"] = 0
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        if attempt == 2:
+                            log.info("Importación %d: «%s» no se pudo buscar (%s)", job_id, song.get("title"), type(e).__name__)
+                            matches[song["key"]] = None
+                            failures["row"] += 1
+                            failures["total"] += 1
+                            if failures["row"] >= 20:
+                                raise RuntimeError(f"Navidrome no responde ({type(e).__name__})") from e
+            # El avance, canción a canción (guardado como mucho una vez por segundo: la app lo mira cada 3 s).
+            progress["done"] += 1
+            if time.monotonic() - progress["saved"] >= 1:
+                progress["saved"] = time.monotonic()
+                self._update(job_id, done=progress["done"])
 
         # Por tandas de 100: lo encontrado va entrando en tu biblioteca mientras se busca.
         for start in range(0, len(songs), 100):
@@ -302,7 +327,7 @@ class ImportJobs:
                 else:
                     await nd.add_to_playlist(library_id, new)
                 added += len(new)
-            self._update(job_id, done=min(start + 100, len(songs)))
+            self._update(job_id, done=progress["done"])
 
         all_matches = {**data["previousMatches"], **{k: v for k, v in matches.items() if v}}
         reordered = False

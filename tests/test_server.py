@@ -420,3 +420,34 @@ def test_importacion_en_el_servidor():
     assert fake.playlists["p2"] == {"name": "Favoritas", "owner": "ana", "ids": ["s5", "s1"]}
     # Nadie más ve tu importación.
     assert c.get(f"/api/v1/import/jobs/{job['id']}", headers=headers("pepe")).status_code == 404
+
+
+def test_una_cancion_que_falla_no_para_la_importacion():
+    import time as _t
+    import httpx as _h
+    fake = FakeNavidrome()
+    real = fake.handler
+
+    def flaky(request):
+        # «Tusa» siempre falla (como una búsqueda que tarda demasiado); las demás van bien.
+        if "search3" in request.url.path and "tusa" in str(request.url).lower():
+            raise _h.ReadTimeout("lento")
+        return real(request)
+
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db),
+                   ImportJobs(db, "http://navidrome.invalid", transport=_h.MockTransport(flaky)))
+    c = TestClient(main.app)
+    body = {"songs": [{"key": "k1", "title": "Tusa", "artist": "KAROL G"},
+                      {"key": "k2", "title": "Despacito", "artist": "Luis Fonsi", "album": "VIDA"}],
+            "library": ["k1", "k2"]}
+    with c:
+        job = c.post("/api/v1/import/jobs", json=body, headers=headers("ana")).json()["job"]
+        for _ in range(100):
+            job = c.get(f"/api/v1/import/jobs/{job['id']}", headers=headers("ana")).json()["job"]
+            if job["status"] != "running":
+                break
+            _t.sleep(0.05)
+    assert job["status"] == "done", job
+    assert job["result"]["found"] == 1 and job["result"]["missing"] == ["k1"]
