@@ -1,5 +1,6 @@
 """Escuchar en grupo: una persona pone la música (el anfitrión) y las demás, escaneando su QR, añaden
-canciones a su cola desde su Melvara.
+canciones a su cola desde su Melvara. Si el anfitrión lo permite, también pueden cambiar de canción o
+adelantar y atrasar (el anfitrión lo recoge y lo aplica en su reproductor).
 
 Solo personas con cuenta en el mismo Navidrome (cada petición se comprueba con él, como todo en Melvara
 Server): no hay invitados. Todo vive en memoria (al reiniciar el servidor, las sesiones se acaban) y caduca
@@ -16,6 +17,8 @@ IDLE_SECONDS = 6 * 3600
 MAX_QUEUE = 500
 MAX_ADDS = 2000
 MAX_TRACK_FIELDS = 40
+MAX_COMMANDS = 200
+CONTROL_ACTIONS = ("next", "previous", "seek")
 
 
 def _clean_track(t) -> dict | None:
@@ -59,7 +62,9 @@ class Jams:
                 del self._jams[code]
             code = secrets.token_urlsafe(9)
             self._jams[code] = {"code": code, "host": host, "members": {}, "kicked": set(), "adds": [], "seq": 0,
-                                "nowPlaying": None, "queue": [], "touched": time.time(), "started": int(time.time())}
+                                "nowPlaying": None, "queue": [], "touched": time.time(), "started": int(time.time()),
+                                "perms": {"skip": False, "seek": False}, "commands": [],
+                                "position": 0.0, "positionAt": time.time(), "playing": False}
             return self._public(self._jams[code], host)
 
     def join(self, code: str, user: str) -> dict:
@@ -108,18 +113,54 @@ class Jams:
                 jam["members"][user] = int(time.time())
             return {"added": len(clean)}
 
-    def pending(self, code: str, user: str, after: int) -> dict:
-        """Para el anfitrión: lo que han añadido desde `after`."""
+    def set_perms(self, code: str, user: str, skip, seek) -> dict:
+        """El anfitrión decide si los demás pueden cambiar de canción y adelantar o atrasar."""
         with self._lock:
             jam = self._get(code, user, host=True)
-            return {"adds": [a for a in jam["adds"] if a["seq"] > after], "seq": jam["seq"]}
+            if isinstance(skip, bool):
+                jam["perms"]["skip"] = skip
+            if isinstance(seek, bool):
+                jam["perms"]["seek"] = seek
+            return self._public(jam, user)
 
-    def update(self, code: str, user: str, now_playing, queue: list) -> None:
-        """El anfitrión cuenta qué suena y qué viene (para que lo vean los demás)."""
+    def control(self, code: str, user: str, action: str, position=None) -> dict:
+        """Alguien de la sesión pide pasar de canción, volver o ir a un punto (si el anfitrión lo permite)."""
+        with self._lock:
+            jam = self._get(code, user)
+            if action not in CONTROL_ACTIONS:
+                raise ValueError("No se puede hacer eso")
+            if not jam["perms"]["seek" if action == "seek" else "skip"] and user != jam["host"]:
+                raise PermissionError("Quien la ha abierto no lo permite")
+            command = {"action": action, "by": user, "at": int(time.time())}
+            if action == "seek":
+                if isinstance(position, bool) or not isinstance(position, (int, float)) or not 0 <= position < 24 * 3600:
+                    raise ValueError("Falta el punto de la canción")
+                command["position"] = float(position)
+            jam["seq"] += 1
+            command["seq"] = jam["seq"]
+            jam["commands"] = (jam["commands"] + [command])[-MAX_COMMANDS:]
+            if user in jam["members"]:
+                jam["members"][user] = int(time.time())
+            return {"ok": True}
+
+    def pending(self, code: str, user: str, after: int) -> dict:
+        """Para el anfitrión: lo que han añadido y lo que han pedido desde `after`."""
+        with self._lock:
+            jam = self._get(code, user, host=True)
+            return {"adds": [a for a in jam["adds"] if a["seq"] > after],
+                    "commands": [c for c in jam["commands"] if c["seq"] > after], "seq": jam["seq"]}
+
+    def update(self, code: str, user: str, now_playing, queue: list, position=None, playing=None) -> None:
+        """El anfitrión cuenta qué suena, por dónde va y qué viene (para que lo vean los demás)."""
         with self._lock:
             jam = self._get(code, user, host=True)
             jam["nowPlaying"] = _clean_track(now_playing)
             jam["queue"] = [t for t in (_clean_track(x) for x in queue[:MAX_QUEUE]) if t]
+            if isinstance(position, (int, float)) and not isinstance(position, bool) and position >= 0:
+                jam["position"] = float(position)
+                jam["positionAt"] = time.time()
+            if isinstance(playing, bool):
+                jam["playing"] = playing
 
     def state(self, code: str, user: str) -> dict:
         with self._lock:
@@ -134,4 +175,8 @@ class Jams:
         return {"code": jam["code"], "host": jam["host"], "isHost": jam["host"] == user,
                 "members": sorted(jam["members"]), "nowPlaying": jam["nowPlaying"],
                 "queue": [{**t, "addedBy": added_by.get(t.get("id"))} for t in jam["queue"]],
-                "started": jam["started"]}
+                "started": jam["started"], "perms": dict(jam["perms"]),
+                # Por dónde va: `position` segundos cuando el reloj del servidor marcaba `positionAt`
+                # (`now` es la hora del servidor, para no depender del reloj de cada iPhone).
+                "position": jam["position"], "positionAt": jam["positionAt"], "playing": jam["playing"],
+                "now": time.time()}

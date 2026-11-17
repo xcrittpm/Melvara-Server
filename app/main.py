@@ -146,7 +146,7 @@ async def status(request: Request):
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.lastfm.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
-                         "imports": state.imports is not None, "jam": True},
+                         "imports": state.imports is not None, "jam": True, "jamControl": True},
                         headers=SECURITY_HEADERS)
 
 
@@ -442,8 +442,13 @@ async def jam_action(request: Request, user: str):
         return state.jams.pending(code, user, after)
     if action == "state":
         queue = body.get("queue")
-        state.jams.update(code, user, body.get("nowPlaying"), queue if isinstance(queue, list) else [])
+        state.jams.update(code, user, body.get("nowPlaying"), queue if isinstance(queue, list) else [],
+                          body.get("position"), body.get("playing"))
         return {"ok": True}
+    if action == "perms":
+        return {"jam": state.jams.set_perms(code, user, body.get("skip"), body.get("seek"))}
+    if action == "control":
+        return state.jams.control(code, user, str(body.get("action", "")), body.get("position"))
     if action == "kick":
         return {"jam": state.jams.kick(code, user, str(body.get("user", "")))}
     return None

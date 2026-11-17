@@ -539,6 +539,26 @@ def test_escuchar_en_grupo():
            headers=headers("ana"))
     seen = c.get(f"/api/v1/jam/{code}", headers=headers("pepe")).json()["jam"]
     assert seen["nowPlaying"]["title"] == "Ahora" and seen["queue"][0]["addedBy"] == "pepe" and seen["isHost"] is False
+    # Cambiar de canción y adelantar: solo si el anfitrión lo permite (por defecto, no).
+    assert seen["perms"] == {"skip": False, "seek": False}
+    assert c.post(f"/api/v1/jam/{code}/control", json={"action": "next"}, headers=headers("pepe")).status_code == 403
+    perms = c.post(f"/api/v1/jam/{code}/perms", json={"skip": True}, headers=headers("ana")).json()["jam"]["perms"]
+    assert perms == {"skip": True, "seek": False}
+    assert c.post(f"/api/v1/jam/{code}/perms", json={"seek": True}, headers=headers("pepe")).status_code == 403
+    assert c.post(f"/api/v1/jam/{code}/control", json={"action": "next"}, headers=headers("pepe")).json()["ok"] is True
+    assert c.post(f"/api/v1/jam/{code}/control", json={"action": "seek", "position": 30}, headers=headers("pepe")).status_code == 403
+    c.post(f"/api/v1/jam/{code}/perms", json={"seek": True}, headers=headers("ana"))
+    assert c.post(f"/api/v1/jam/{code}/control", json={"action": "seek"}, headers=headers("pepe")).status_code == 400
+    assert c.post(f"/api/v1/jam/{code}/control", json={"action": "borrar"}, headers=headers("pepe")).status_code == 400
+    c.post(f"/api/v1/jam/{code}/control", json={"action": "seek", "position": 30}, headers=headers("pepe"))
+    after = pending["seq"]
+    commands = c.get(f"/api/v1/jam/{code}/pending", params={"after": after}, headers=headers("ana")).json()["commands"]
+    assert [(x["action"], x["by"], x.get("position")) for x in commands] == [("next", "pepe", None), ("seek", "pepe", 30.0)]
+    # Por dónde va la canción del anfitrión.
+    c.post(f"/api/v1/jam/{code}/state", json={"nowPlaying": {"id": "s0"}, "queue": [], "position": 12.5, "playing": True},
+           headers=headers("ana"))
+    seen = c.get(f"/api/v1/jam/{code}", headers=headers("pepe")).json()["jam"]
+    assert seen["position"] == 12.5 and seen["playing"] is True and seen["now"] >= seen["positionAt"]
     # Quitar a alguien: ya no puede volver.
     c.post(f"/api/v1/jam/{code}/kick", json={"user": "pepe"}, headers=headers("ana"))
     assert c.post(f"/api/v1/jam/{code}/join", headers=headers("pepe")).status_code == 403
