@@ -19,6 +19,9 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | GET | `/api/v1/charts/extra` | usuario de Navidrome | Listas extra de Last.fm que ha añadido el administrador |
 | POST | `/api/v1/charts/extra` | administrador de Navidrome | Añadir una lista extra (`kind`: `tag`, `user` o `artist`; `value`; `title`) |
 | PATCH / DELETE | `/api/v1/charts/extra/{id}` | administrador de Navidrome | Cambiarla o quitarla |
+| POST | `/api/v1/import/jobs` | usuario de Navidrome | Importar en el servidor (la app puede cerrarse) |
+| GET | `/api/v1/import/jobs` · `/api/v1/import/jobs/{id}` | usuario de Navidrome | Tu última importación o una concreta: avance y resultado |
+| DELETE | `/api/v1/import/jobs/{id}` | usuario de Navidrome | Cancelarla |
 | GET | `/api/v1/service/wishlist` | token de servicio | Leer las listas de **todos** (otras aplicaciones) |
 | PATCH | `/api/v1/service/wishlist/{id}` | token de servicio | Cambiar el estado de un deseo (p. ej. «en la biblioteca») |
 | GET | `/api/v1/lastfm/search?q=` | usuario de Navidrome | Buscar canciones en Last.fm |
@@ -178,6 +181,28 @@ curl "${H[@]}" "https://musica-api.ejemplo.com/api/v1/lastfm/charts?kind=tag&val
 
 Al añadir o cambiar una, el servidor comprueba que Last.fm la tiene y no está vacía. Como mucho 50.
 `/api/v1/status` dice `"extraLists": true` cuando el servidor las admite (desde la 2.6).
+
+## Importar en el servidor
+
+Desde la 2.7. La app manda la lista de canciones de tu biblioteca de otro proveedor (Apple Music, Spotify,
+Plex) y el servidor las busca en tu Navidrome, las añade a tu biblioteca de Melvara, crea o completa las
+playlists y ordena tu biblioteca, aunque cierres la app.
+
+```json
+{"provider": "appleMusic",
+ "songs": [{"key": "tusa|karol g|kg0516", "title": "Tusa", "artist": "KAROL G", "album": "KG0516"}],
+ "library": ["tusa|karol g|kg0516"],
+ "playlists": [{"name": "Favoritas", "keys": ["tusa|karol g|kg0516"]}],
+ "reorderLibrary": true, "order": ["tusa|karol g|kg0516"], "previousMatches": {}}
+```
+
+- El servidor actúa **como tú** con el acceso que manda la app (usuario, token y sal; nunca la contraseña),
+  **solo en memoria** mientras dura la importación. Si el servidor se reinicia a medias, queda «interrupted».
+- Una importación a la vez por persona; como mucho 20.000 canciones.
+- `GET /api/v1/import/jobs/{id}` → `status` (`running`, `done`, `failed`, `interrupted`, `cancelled`), `done` y
+  `total`; al terminar, `result` con lo encontrado (`matches`: clave → id de la canción) y lo que falta.
+- La búsqueda es la misma que la de la app (`find_track` en `app/importer.py` y `findTrack` en
+  `Melvara/Catalog/Charts.swift`): si se cambia una, hay que cambiar la otra.
 
 ## Ruta de servicio: las listas de todos
 

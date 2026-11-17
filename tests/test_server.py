@@ -12,6 +12,7 @@ from app import main  # noqa: E402
 from app.auth import Auth, RateLimiter  # noqa: E402
 from app.lastfm import LastFM  # noqa: E402
 from app.extras import ExtraLists  # noqa: E402
+from app.importer import ImportJobs, find_track, tokens  # noqa: E402
 from app.reports import Reports  # noqa: E402
 from app.wishlist import Wishlist  # noqa: E402
 
@@ -333,3 +334,89 @@ def test_listas_extra_las_pone_un_administrador_y_las_ven_todos():
     assert c.patch(f"/api/v1/charts/extra/{item_id}", json=cambio, headers=headers("admin")).json()["item"]["title"] == "Reggaetón"
     assert c.delete(f"/api/v1/charts/extra/{item_id}", headers=headers("admin")).json()["deleted"] is True
     assert c.get("/api/v1/charts/extra", headers=headers("ana")).json()["items"] == []
+
+
+class FakeNavidrome:
+    """Navidrome de mentira para probar la importación (search3, playlists)."""
+
+    def __init__(self):
+        self.songs = [
+            {"id": "s1", "title": "Tusa", "artist": "KAROL G", "album": "KG0516"},
+            {"id": "s2", "title": "Despacito (feat. Daddy Yankee)", "artist": "Luis Fonsi", "album": "Singles"},
+            {"id": "s3", "title": "Despacito", "artist": "Luis Fonsi", "album": "VIDA"},
+            {"id": "s4", "title": "90%", "artist": "C Marí", "album": "Sempre Cor"},
+            {"id": "s5", "title": "90%", "artist": "C Marí", "album": "Sempre Cor (Deluxe)"},
+            {"id": "s9", "title": "Otra", "artist": "Alguien", "album": "X"},
+        ]
+        self.playlists = {"p1": {"name": "Melvara · Mi biblioteca", "owner": "ana", "ids": ["s9"]}}
+
+    def handler(self, request):
+        import httpx as _h
+        from urllib.parse import parse_qsl
+        params = dict(request.url.params)
+        pairs = list(request.url.params.multi_items())
+        if request.method == "POST":
+            pairs = parse_qsl(request.content.decode())
+            params = dict(pairs)
+        ep = request.url.path.rsplit("/", 1)[-1].replace(".view", "")
+        ok = {"status": "ok"}
+        if ep == "search3":
+            words = tokens(params["query"])
+            found = [s for s in self.songs if all(w in tokens(f"{s['title']} {s['artist']} {s['album']}") for w in words)]
+            ok["searchResult3"] = {"song": found}
+        elif ep == "getPlaylists":
+            ok["playlists"] = {"playlist": [{"id": k, "name": v["name"], "owner": v["owner"]} for k, v in self.playlists.items()]}
+        elif ep == "getPlaylist":
+            ok["playlist"] = {"entry": [{"id": i} for i in self.playlists[params["id"]]["ids"]]}
+        elif ep == "createPlaylist":
+            ids = [v for k, v in pairs if k == "songId"]
+            if "playlistId" in params:
+                self.playlists[params["playlistId"]]["ids"] = ids
+            else:
+                new = f"p{len(self.playlists) + 1}"
+                self.playlists[new] = {"name": params["name"], "owner": "ana", "ids": ids}
+                ok["playlist"] = {"id": new}
+        elif ep == "updatePlaylist":
+            self.playlists[params["playlistId"]]["ids"] += [v for k, v in pairs if k == "songIdToAdd"]
+        return _h.Response(200, json={"subsonic-response": ok})
+
+
+def test_importacion_en_el_servidor():
+    import time as _t
+    import httpx as _h
+    fake = FakeNavidrome()
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db),
+                   ImportJobs(db, "http://navidrome.invalid", transport=_h.MockTransport(fake.handler)))
+    c = TestClient(main.app)
+    assert c.get("/api/v1/status").json()["imports"] is True
+    body = {
+        "provider": "appleMusic",
+        "songs": [
+            {"key": "k1", "title": "Tusa", "artist": "KAROL G, Nicki Minaj", "album": "KG0516"},
+            {"key": "k2", "title": "Despacito", "artist": "Luis Fonsi", "album": "VIDA"},
+            {"key": "k3", "title": "90%", "artist": "C Marí & BLNCO", "album": "Sempre Cor (Deluxe)"},
+            {"key": "k4", "title": "No existe", "artist": "Nadie", "album": ""},
+        ],
+        "library": ["k1", "k2", "k3", "k4"],
+        "playlists": [{"name": "Favoritas", "keys": ["k3", "k1"]}],
+        "reorderLibrary": True, "order": ["k3", "k2", "k1"],
+    }
+    with c:
+        job = c.post("/api/v1/import/jobs", json=body, headers=headers("ana")).json()["job"]
+        assert job["status"] == "running" and job["total"] == 4
+        for _ in range(100):
+            job = c.get(f"/api/v1/import/jobs/{job['id']}", headers=headers("ana")).json()["job"]
+            if job["status"] != "running":
+                break
+            _t.sleep(0.05)
+    assert job["status"] == "done", job
+    r = job["result"]
+    assert r["found"] == 3 and r["missing"] == ["k4"] and r["addedToLibrary"] == 3 and r["playlistsCreated"] == 1
+    assert r["matches"] == {"k1": "s1", "k2": "s3", "k3": "s5"}   # versión exacta y álbum correcto
+    # Biblioteca: lo que ya tenía primero y lo importado en el orden del proveedor.
+    assert fake.playlists["p1"]["ids"] == ["s9", "s5", "s3", "s1"] and r["reordered"] is True
+    assert fake.playlists["p2"] == {"name": "Favoritas", "owner": "ana", "ids": ["s5", "s1"]}
+    # Nadie más ve tu importación.
+    assert c.get(f"/api/v1/import/jobs/{job['id']}", headers=headers("pepe")).status_code == 404

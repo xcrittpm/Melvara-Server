@@ -17,6 +17,7 @@ from . import __version__
 from .auth import Auth, RateLimiter
 from .lastfm import LastFM
 from .extras import ExtraLists
+from .importer import ImportJobs
 from .reports import Reports
 from .wishlist import Wishlist
 
@@ -42,16 +43,19 @@ class State:
     lastfm: LastFM
     reports: Reports | None = None
     extras: ExtraLists | None = None
+    imports: ImportJobs | None = None
 
 
 state = State()
 
 
 def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "",
-              reports: Reports | None = None, extras: ExtraLists | None = None) -> None:
+              reports: Reports | None = None, extras: ExtraLists | None = None,
+              imports: ImportJobs | None = None) -> None:
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
     state.reports = reports
     state.extras = extras
+    state.imports = imports
     state.service_token = service_token.strip()
 
 
@@ -81,6 +85,7 @@ async def lifespan(app):
             os.environ.get("SERVICE_TOKEN", ""),
             Reports(database),
             ExtraLists(database),
+            ImportJobs(database, os.environ["NAVIDROME_URL"]),
         )
         if state.service_token and len(state.service_token) < 32:
             log.warning("SERVICE_TOKEN tiene menos de 32 caracteres: la ruta de servicio queda desactivada")
@@ -136,7 +141,8 @@ async def status(request: Request):
     # Público (sin datos): la app lo usa para saber que aquí hay un Melvara Server.
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.lastfm.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token),
-                         "reports": state.reports is not None, "extraLists": state.extras is not None},
+                         "reports": state.reports is not None, "extraLists": state.extras is not None,
+                         "imports": state.imports is not None},
                         headers=SECURITY_HEADERS)
 
 
@@ -370,6 +376,34 @@ async def extra_list_item(request: Request, user: str):
     return {"item": item} if item else None
 
 
+# ------------------------------------------------------------------ importar en el servidor
+
+
+def _imports() -> ImportJobs:
+    if state.imports is None:
+        raise ValueError("Este servidor no importa en segundo plano")
+    return state.imports
+
+
+async def import_jobs(request: Request, user: str):
+    if request.method == "GET":
+        job = _imports().latest(user)
+        return {"job": job}
+    return {"job": _imports().start(user, request.state.access, await _body(request))}
+
+
+async def import_job(request: Request, user: str):
+    try:
+        job_id = int(request.path_params["id"])
+    except ValueError:
+        raise ValueError("Identificador no válido")
+    if request.method == "DELETE":
+        job = _imports().cancel(job_id, user)
+    else:
+        job = _imports().get(job_id, user)
+    return {"job": job} if job else None
+
+
 app = Starlette(
     routes=[
         Route("/health", health),
@@ -381,6 +415,8 @@ app = Starlette(
         Route("/api/v1/wishlist/{id}", protected(wishlist_item), methods=["DELETE"]),
         Route("/api/v1/reports", protected(reports), methods=["GET", "POST"]),
         Route("/api/v1/charts/extra", protected(extra_lists), methods=["GET", "POST"]),
+        Route("/api/v1/import/jobs", protected(import_jobs), methods=["GET", "POST"]),
+        Route("/api/v1/import/jobs/{id}", protected(import_job), methods=["GET", "DELETE"]),
         Route("/api/v1/charts/extra/{id}", protected(extra_list_item), methods=["PATCH", "DELETE"]),
         Route("/api/v1/reports/{id}", protected(report_item), methods=["PATCH"]),
         Route("/api/v1/service/wishlist", service_wishlist, methods=["GET"]),
