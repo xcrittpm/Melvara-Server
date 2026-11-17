@@ -12,7 +12,7 @@ from app import main  # noqa: E402
 from app.auth import Auth, RateLimiter  # noqa: E402
 from app.lastfm import LastFM  # noqa: E402
 from app.extras import ExtraLists  # noqa: E402
-from app.importer import ImportJobs, find_track, tokens  # noqa: E402
+from app.importer import ImportJobs, find_track, match_library, tokens  # noqa: E402
 from app.reports import Reports  # noqa: E402
 from app.wishlist import Wishlist  # noqa: E402
 
@@ -421,7 +421,8 @@ def test_importacion_en_el_servidor():
     assert job["status"] == "done", job
     r = job["result"]
     assert r["found"] == 3 and r["missing"] == ["k4"] and r["addedToLibrary"] == 3 and r["playlistsCreated"] == 1
-    assert r["matches"] == {"k1": "s1", "k2": "s3", "k3": "s5"}   # versión exacta y álbum correcto
+    # Versión exacta y álbum correcto; «Otra» (k9) ya estaba en la biblioteca y también se apunta.
+    assert r["matches"] == {"k1": "s1", "k2": "s3", "k3": "s5", "k9": "s9"}
     # Biblioteca: lo que ya tenía primero y lo importado en el orden del proveedor.
     assert fake.playlists["p1"]["ids"] == ["s5", "s3", "s1", "s9"] and r["reordered"] is True
     assert fake.playlists["p2"] == {"name": "Favoritas", "owner": "ana", "ids": ["s5", "s1"]}
@@ -492,3 +493,24 @@ def test_biblioteca_en_una_sola_linea_de_tiempo():
     assert job["status"] == "done", job
     # s9 (2020) · Despacito (antes de ayer, Apple Music) · s4 (ayer, Melvara) · Tusa (hoy, Apple Music)
     assert fake.playlists["p1"]["ids"] == ["s9", "s3", "s4", "s1"]
+
+
+def test_reconoce_tu_biblioteca_aunque_los_titulos_no_sean_identicos():
+    """Apple Music dice «Despacito» y el archivo «Despacito - Remastered 2011» en «VIDA (Deluxe)»: es la misma."""
+    entries = [
+        {"id": "a", "title": "Despacito - Remastered 2011", "artist": "Luis Fonsi", "album": "VIDA (Deluxe)"},
+        {"id": "b", "title": "Tusa (feat. Nicki Minaj)", "artist": "KAROL G", "album": "KG0516"},
+        {"id": "c", "title": "Tusa", "artist": "Otra Persona", "album": "X"},
+        {"id": "d", "title": "Hola", "artist": "Alguien", "album": "Uno"},
+        {"id": "e", "title": "Hola", "artist": "Alguien", "album": "Dos"},
+    ]
+    order = [
+        {"key": "k1", "title": "Despacito", "artist": "Luis Fonsi & Daddy Yankee", "album": "VIDA"},
+        {"key": "k2", "title": "Tusa", "artist": "KAROL G, Nicki Minaj", "album": "KG0516"},
+        {"key": "k3", "title": "Hola", "artist": "Alguien", "album": "Dos"},
+        {"key": "k4", "title": "No está", "artist": "Nadie", "album": ""},
+    ]
+    got = match_library(entries, order, {})
+    assert got == {"k1": "a", "k2": "b", "k3": "e"}
+    # Lo ya sabido manda (si sigue en la biblioteca).
+    assert match_library(entries, order, {"k3": "d"})["k3"] == "d"

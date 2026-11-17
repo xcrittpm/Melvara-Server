@@ -165,6 +165,48 @@ async def find_track(nd: Navidrome, song: dict) -> str | None:
     return best["id"] if best else None
 
 
+def match_library(entries: list[dict], order: list[dict], known: dict[str, str]) -> dict[str, str]:
+    """Qué canción de tu biblioteca es cada una del proveedor, sin volver a buscar en Navidrome: con las mismas
+    reglas que `find_track` (título limpio, artista principal, mismo álbum si se puede, y si no una variante).
+    `known`: las que ya se saben (clave → id). Devuelve clave → id para todas las que encuentra."""
+    by_title: dict[str, list[dict]] = {}
+    by_first_word: dict[str, list[dict]] = {}
+    for e in entries:
+        words = tokens(clean_title(e.get("title", "")))
+        if words:
+            by_title.setdefault(" ".join(words), []).append(e)
+            by_first_word.setdefault(words[0], []).append(e)
+    library_ids = {e["id"] for e in entries}
+    result: dict[str, str] = {}
+    for item in order:
+        key = item["key"]
+        if known.get(key) in library_ids:
+            result[key] = known[key]
+            continue
+        words = tokens(clean_title(item.get("title", "")))
+        if not words:
+            continue
+        wanted = " ".join(words)
+        artist = item.get("artist", "")
+        main_artist = tokens(re.split(r"[,&]", artist)[0] if artist else "")
+
+        def same_artist(e: dict) -> bool:
+            if not main_artist:
+                return True
+            have = tokens(f"{e.get('artist', '')} {e.get('displayArtist', '')} {e.get('displayAlbumArtist', '')}")
+            return all(a in have for a in main_artist)
+
+        exact = [e for e in by_title.get(wanted, []) if same_artist(e)]
+        variants = exact or [e for e in by_first_word.get(words[0], [])
+                             if same_artist(e) and " ".join(tokens(clean_title(e.get("title", "")))).startswith(wanted)]
+        if not variants:
+            continue
+        album = norm(item.get("album", ""))
+        same_album = [e for e in variants if album and norm(e.get("album", "")) == album]
+        result[key] = (same_album or variants)[0]["id"]
+    return result
+
+
 # ------------------------------------------------------------------ trabajos
 
 
@@ -244,10 +286,10 @@ class ImportJobs:
             if isinstance(item, dict) and str(item.get("key", "")).strip():
                 added = item.get("added")
                 order.append({"key": str(item["key"])[:600], "title": str(item.get("title", ""))[:300],
-                              "album": str(item.get("album") or "")[:300],
+                              "artist": str(item.get("artist", ""))[:300], "album": str(item.get("album") or "")[:300],
                               "added": int(added) if isinstance(added, (int, float)) else None})
             elif isinstance(item, str) and item.strip():
-                order.append({"key": item[:600], "title": "", "album": "", "added": None})
+                order.append({"key": item[:600], "title": "", "artist": "", "album": "", "added": None})
         dates = body.get("libraryDates") if isinstance(body.get("libraryDates"), dict) else {}
         library_dates = {str(k)[:100]: int(v) for k, v in list(dates.items())[:MAX_SONGS * 2] if isinstance(v, (int, float))}
         previous = body.get("previousMatches") if isinstance(body.get("previousMatches"), dict) else {}
@@ -357,6 +399,7 @@ class ImportJobs:
 
         all_matches = {**data["previousMatches"], **{k: v for k, v in matches.items() if v}}
         reordered = False
+        library_matches: dict[str, str] = {}
         # Mismo orden que en el proveedor: lo que ya tenías y no viene de ahí, primero; detrás lo importado.
         # Una sola línea de tiempo: cada canción de tu biblioteca por la fecha en que la añadiste (en el
         # proveedor o en Melvara con el +, la más antigua); si no se sabe, cuándo llegó a tu servidor
@@ -364,15 +407,16 @@ class ImportJobs:
         if data["reorderLibrary"] and library_id and data["order"]:
             entries = await nd.playlist_entries(library_id)
             current = [e["id"] for e in entries]
-            # Plan B (como en la app): lo que no tiene su id apuntado se reconoce por título y álbum.
-            loose: dict[str, str] = {}
-            for e in entries:
-                loose.setdefault(f"{norm(e.get('title', ''))}|{norm(e.get('album', ''))}", e["id"])
+            # Qué canción de tu biblioteca es cada una del proveedor: lo ya sabido y, para el resto, las mismas
+            # reglas que la búsqueda (sin volver a buscar en Navidrome).
+            resolved = match_library(entries, data["order"], all_matches)
             provider_date: dict[str, int] = {}
             for item in data["order"]:
-                tid = all_matches.get(item["key"]) or loose.get(f"{norm(item['title'])}|{norm(item['album'])}")
+                tid = resolved.get(item["key"])
                 if tid and item.get("added"):
                     provider_date[tid] = min(provider_date.get(tid, item["added"]), item["added"])
+            # Se devuelven a la app: la próxima vez ya están apuntadas.
+            library_matches = resolved
 
             def sort_date(entry: dict) -> int:
                 known = [d for d in (provider_date.get(entry["id"]), data["libraryDates"].get(entry["id"])) if d and d > 0]
@@ -415,7 +459,7 @@ class ImportJobs:
         missing = [s["key"] for s in songs if not matches.get(s["key"])]
         return {"total": len(songs), "found": len(songs) - len(missing), "addedToLibrary": added,
                 "playlistsCreated": created, "playlistsUpdated": updated, "reordered": reordered,
-                "matches": {k: v for k, v in matches.items() if v}, "missing": missing}
+                "matches": {**library_matches, **{k: v for k, v in matches.items() if v}}, "missing": missing}
 
     async def _library_playlist(self, nd: Navidrome) -> str | None:
         mine = [p for p in await nd.playlists() if p.get("name") in LIBRARY_TITLES and p.get("owner") == nd.auth["u"]]
