@@ -24,6 +24,7 @@ class Auth:
         self.ttl = ttl
         self.negative_ttl = negative_ttl
         self._cache: dict[str, tuple[float, str | None]] = {}
+        self._admins: dict[str, tuple[float, bool]] = {}
         self._lock = threading.Lock()
         self._client = httpx.Client(timeout=10.0)
 
@@ -48,6 +49,34 @@ class Auth:
             if len(self._cache) > 5000:  # limpieza sencilla
                 self._cache = {kk: v for kk, v in self._cache.items() if v[0] > now}
         return result
+
+    def is_admin(self, user: str, token: str, salt: str) -> bool:
+        """La cuenta es administradora en Navidrome (para ver las denuncias)."""
+        k = self.key(user, token, salt)
+        now = time.monotonic()
+        with self._lock:
+            hit = self._admins.get(k)
+            if hit and hit[0] > now:
+                return hit[1]
+        result = self._ask_admin(user, token, salt)
+        with self._lock:
+            self._admins[k] = (now + (self.ttl if result else self.negative_ttl), result)
+            if len(self._admins) > 5000:
+                self._admins = {kk: v for kk, v in self._admins.items() if v[0] > now}
+        return result
+
+    def _ask_admin(self, user: str, token: str, salt: str) -> bool:
+        try:
+            resp = self._client.get(
+                f"{self.navidrome_url}/rest/getUser.view",
+                params={"u": user, "t": token, "s": salt, "v": "1.16.1", "c": "MelvaraServer", "f": "json",
+                        "username": user},
+            )
+            body = resp.json().get("subsonic-response", {})
+        except (httpx.HTTPError, ValueError):
+            log.warning("No se pudo contactar con Navidrome para comprobar si es administrador")
+            return False
+        return body.get("status") == "ok" and body.get("user", {}).get("adminRole") is True
 
     def _ask_navidrome(self, user: str, token: str, salt: str) -> bool:
         try:

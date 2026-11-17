@@ -16,6 +16,7 @@ from starlette.routing import Route
 from . import __version__
 from .auth import Auth, RateLimiter
 from .lastfm import LastFM
+from .reports import Reports
 from .wishlist import Wishlist
 
 logging.basicConfig(
@@ -38,13 +39,16 @@ class State:
     limiter: RateLimiter
     wishlist: Wishlist
     lastfm: LastFM
+    reports: Reports | None = None
 
 
 state = State()
 
 
-def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "") -> None:
+def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "",
+              reports: Reports | None = None) -> None:
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
+    state.reports = reports
     state.service_token = service_token.strip()
 
 
@@ -65,12 +69,14 @@ async def lifespan(app):
     if not getattr(state, "wishlist", None):  # en las pruebas se configura a mano
         data_dir = os.environ.get("DATA_DIR", "/data")
         os.makedirs(data_dir, exist_ok=True)
+        database = _database(data_dir)
         configure(
             Auth(os.environ["NAVIDROME_URL"]),
             RateLimiter(int(os.environ.get("RATE_LIMIT_PER_MINUTE", "120"))),
-            Wishlist(_database(data_dir)),
+            Wishlist(database),
             LastFM(os.environ.get("LASTFM_API_KEY", ""), os.environ.get("LASTFM_SHARED_SECRET", "")),
             os.environ.get("SERVICE_TOKEN", ""),
+            Reports(database),
         )
         if state.service_token and len(state.service_token) < 32:
             log.warning("SERVICE_TOKEN tiene menos de 32 caracteres: la ruta de servicio queda desactivada")
@@ -101,8 +107,11 @@ def protected(handler):
         username = state.auth.user_for(user, token, salt)
         if username is None:
             return _error(401, "Este acceso no es válido en Navidrome")
+        request.state.access = (user, token, salt)
         try:
             result = await handler(request, username)
+        except PermissionError as e:
+            return _error(403, str(e) or "Solo para administradores")
         except ValueError as e:
             return _error(400, str(e) or "Petición no válida")
         if result is None:
@@ -122,7 +131,8 @@ async def health(request: Request):
 async def status(request: Request):
     # Público (sin datos): la app lo usa para saber que aquí hay un Melvara Server.
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.lastfm.enabled,
-                         "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token)},
+                         "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token),
+                         "reports": state.reports is not None},
                         headers=SECURITY_HEADERS)
 
 
@@ -251,6 +261,51 @@ async def wishlist_item(request: Request, user: str):
     return {"deleted": True} if state.wishlist.remove(user, item_id) else None
 
 
+# ------------------------------------------------------------------ denuncias
+
+
+def _reports() -> Reports:
+    if state.reports is None:
+        raise ValueError("Las denuncias no están activadas en este servidor")
+    return state.reports
+
+
+def _require_admin(request: Request) -> None:
+    if not state.auth.is_admin(*request.state.access):
+        raise PermissionError("Solo las cuentas administradoras de Navidrome ven las denuncias")
+
+
+async def reports(request: Request, user: str):
+    if request.method == "GET":
+        _require_admin(request)
+        return {"items": _reports().list(request.query_params.get("all") == "1")}
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except json.JSONDecodeError:
+        raise ValueError("Datos no válidos")
+    if not isinstance(body, dict):
+        raise ValueError("Datos no válidos")
+
+    def text(key: str) -> str | None:
+        value = body.get(key)
+        return str(value) if value is not None else None
+
+    item = _reports().add(user, text("reported") or "", text("reason") or "", text("details"),
+                          text("playlistId"), text("playlistName"))
+    log.info("Denuncia %d: %s denuncia a %s (%s)", item["id"], user, item["reported"], item["reason"])
+    return {"item": item}
+
+
+async def report_item(request: Request, user: str):
+    _require_admin(request)
+    try:
+        item_id = int(request.path_params["id"])
+    except ValueError:
+        raise ValueError("Identificador no válido")
+    item = _reports().resolve(item_id, user)
+    return {"item": item} if item else None
+
+
 app = Starlette(
     routes=[
         Route("/health", health),
@@ -260,6 +315,8 @@ app = Starlette(
         Route("/api/v1/lastfm/call", protected(lastfm_call), methods=["POST"]),
         Route("/api/v1/wishlist", protected(wishlist), methods=["GET", "POST"]),
         Route("/api/v1/wishlist/{id}", protected(wishlist_item), methods=["DELETE"]),
+        Route("/api/v1/reports", protected(reports), methods=["GET", "POST"]),
+        Route("/api/v1/reports/{id}", protected(report_item), methods=["PATCH"]),
         Route("/api/v1/service/wishlist", service_wishlist, methods=["GET"]),
         Route("/api/v1/service/wishlist/{id}", service_wishlist_item, methods=["PATCH"]),
     ],

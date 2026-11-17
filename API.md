@@ -13,6 +13,9 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | GET | `/api/v1/wishlist` | usuario de Navidrome | Ver tu lista de deseos |
 | POST | `/api/v1/wishlist` | usuario de Navidrome | Añadir una canción a tu lista |
 | DELETE | `/api/v1/wishlist/{id}` | usuario de Navidrome | Quitar una canción de tu lista |
+| POST | `/api/v1/reports` | usuario de Navidrome | Denunciar a una persona o una playlist compartida |
+| GET | `/api/v1/reports` | administrador de Navidrome | Ver las denuncias sin revisar (`?all=1`: también las revisadas) |
+| PATCH | `/api/v1/reports/{id}` | administrador de Navidrome | Marcar una denuncia como revisada |
 | GET | `/api/v1/service/wishlist` | token de servicio | Leer las listas de **todos** (otras aplicaciones) |
 | PATCH | `/api/v1/service/wishlist/{id}` | token de servicio | Cambiar el estado de un deseo (p. ej. «en la biblioteca») |
 | GET | `/api/v1/lastfm/search?q=` | usuario de Navidrome | Buscar canciones en Last.fm |
@@ -130,6 +133,29 @@ curl "${H[@]}" -X DELETE https://musica-api.ejemplo.com/api/v1/wishlist/13
 ```
 
 Si ese `id` no existe o es de otra persona: 404.
+
+## Denuncias
+
+Desde Melvara 1.2 (6) se puede denunciar el perfil de otra persona del servidor o una playlist que ha
+compartido. La denuncia se guarda aquí y la ven las cuentas **administradoras** de Navidrome en Melvara
+(Ajustes → Administración → Denuncias). El servidor pregunta a Navidrome (`getUser`) si la cuenta es
+administradora.
+
+```bash
+curl "${H[@]}" -X POST -H 'Content-Type: application/json' \
+  -d '{"reported":"pepe","reason":"offensive","details":"Foto ofensiva","playlistId":"abc","playlistName":"Lo mejor"}' \
+  https://musica-api.ejemplo.com/api/v1/reports
+```
+
+`reason`: `offensive`, `spam`, `harassment`, `copyright` u `other`. Cada persona puede tener como mucho 50
+denuncias sin revisar. Para verlas y marcarlas (solo administradores):
+
+```bash
+curl "${H[@]}" https://musica-api.ejemplo.com/api/v1/reports
+curl "${H[@]}" -X PATCH https://musica-api.ejemplo.com/api/v1/reports/3
+```
+
+`/api/v1/status` dice `"reports": true` cuando el servidor las recoge.
 
 ## Ruta de servicio: las listas de todos
 

@@ -11,6 +11,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from app import main  # noqa: E402
 from app.auth import Auth, RateLimiter  # noqa: E402
 from app.lastfm import LastFM  # noqa: E402
+from app.reports import Reports  # noqa: E402
 from app.wishlist import Wishlist  # noqa: E402
 
 
@@ -20,6 +21,9 @@ class FakeAuth(Auth):
 
     def _ask_navidrome(self, user, token, salt):
         return token == "bueno"
+
+    def _ask_admin(self, user, token, salt):
+        return user == "admin"
 
 
 class FakeLastFM(LastFM):
@@ -39,8 +43,9 @@ SERVICE = "s" * 40
 
 def make_client(lastfm_key="clave", per_minute=100, service_token=""):
     tmp = tempfile.mkdtemp()
-    main.configure(FakeAuth(), RateLimiter(per_minute), Wishlist(os.path.join(tmp, "s.sqlite")), FakeLastFM(lastfm_key),
-                   service_token)
+    db = os.path.join(tmp, "s.sqlite")
+    main.configure(FakeAuth(), RateLimiter(per_minute), Wishlist(db), FakeLastFM(lastfm_key),
+                   service_token, Reports(db))
     return TestClient(main.app)
 
 
@@ -281,3 +286,23 @@ def test_limpieza_de_la_busqueda_de_lastfm():
     # Si nada tiene todas las palabras, no se queda vacío: se dan las limpias.
     out = clean_search("cancion inventada xyz", [t("Otra", "Alguien", 5000)])
     assert len(out) == 1
+
+
+def test_denuncias_las_ve_solo_un_administrador():
+    c = make_client()
+    assert c.get("/api/v1/status").json()["reports"] is True
+    r = c.post("/api/v1/reports", json={"reported": "pepe", "reason": "offensive", "details": "Foto ofensiva",
+                                        "playlistId": "p1", "playlistName": "Lo mejor"}, headers=headers("ana"))
+    assert r.status_code == 200 and r.json()["item"]["reporter"] == "ana"
+    item_id = r.json()["item"]["id"]
+    assert c.post("/api/v1/reports", json={"reported": "pepe", "reason": "nope"}, headers=headers("ana")).status_code == 400
+    assert c.post("/api/v1/reports", json={"reported": "ana", "reason": "spam"}, headers=headers("ana")).status_code == 400
+    assert c.get("/api/v1/reports", headers=headers("ana")).status_code == 403
+    items = c.get("/api/v1/reports", headers=headers("admin")).json()["items"]
+    assert [i["reported"] for i in items] == ["pepe"] and items[0]["playlistName"] == "Lo mejor"
+    assert c.patch(f"/api/v1/reports/{item_id}", headers=headers("ana")).status_code == 403
+    done = c.patch(f"/api/v1/reports/{item_id}", headers=headers("admin")).json()["item"]
+    assert done["resolvedBy"] == "admin" and done["resolvedAt"]
+    assert c.get("/api/v1/reports", headers=headers("admin")).json()["items"] == []
+    assert len(c.get("/api/v1/reports", params={"all": "1"}, headers=headers("admin")).json()["items"]) == 1
+    assert c.patch("/api/v1/reports/999", headers=headers("admin")).status_code == 404
