@@ -95,9 +95,12 @@ class Navidrome:
         body = await self.call("getPlaylists")
         return (body.get("playlists") or {}).get("playlist") or []
 
-    async def playlist_ids(self, playlist_id: str) -> list[str]:
+    async def playlist_entries(self, playlist_id: str) -> list[dict]:
         body = await self.call("getPlaylist", [("id", playlist_id)])
-        return [e["id"] for e in (body.get("playlist") or {}).get("entry") or []]
+        return (body.get("playlist") or {}).get("entry") or []
+
+    async def playlist_ids(self, playlist_id: str) -> list[str]:
+        return [e["id"] for e in await self.playlist_entries(playlist_id)]
 
     async def create_playlist(self, name: str, ids: list[str]) -> str | None:
         body = await self.call("createPlaylist", [("name", name)] + [("songId", i) for i in ids], post=True)
@@ -223,11 +226,19 @@ class ImportJobs:
         for p in body.get("playlists") or []:
             if isinstance(p, dict) and str(p.get("name", "")).strip():
                 playlists.append({"name": str(p["name"])[:200], "keys": key_list(p.get("keys"))})
-        order = body.get("order") if isinstance(body.get("order"), list) else []
+        # El orden de tu biblioteca en el proveedor: claves, o {key, title, album} (así se reconocen por título y
+        # álbum las canciones de importaciones antiguas, que no tienen su id apuntado).
+        order = []
+        for item in (body.get("order") if isinstance(body.get("order"), list) else [])[:MAX_SONGS]:
+            if isinstance(item, dict) and str(item.get("key", "")).strip():
+                order.append({"key": str(item["key"])[:600], "title": str(item.get("title", ""))[:300],
+                              "album": str(item.get("album") or "")[:300]})
+            elif isinstance(item, str) and item.strip():
+                order.append({"key": item[:600], "title": "", "album": ""})
         previous = body.get("previousMatches") if isinstance(body.get("previousMatches"), dict) else {}
         return {"provider": str(body.get("provider", "otro"))[:40], "songs": clean, "library": key_list(body.get("library")),
                 "playlists": playlists, "reorderLibrary": bool(body.get("reorderLibrary")),
-                "order": [str(k)[:600] for k in order][:MAX_SONGS],
+                "order": order,
                 "previousMatches": {str(k)[:600]: str(v)[:100] for k, v in list(previous.items())[:MAX_SONGS]}}
 
     def start(self, user: str, access: tuple[str, str, str], body: dict) -> dict:
@@ -333,12 +344,17 @@ class ImportJobs:
         reordered = False
         # Mismo orden que en el proveedor: lo que ya tenías y no viene de ahí, primero; detrás lo importado.
         if data["reorderLibrary"] and library_id and data["order"]:
-            current = await nd.playlist_ids(library_id)
+            entries = await nd.playlist_entries(library_id)
+            current = [e["id"] for e in entries]
             current_set = set(current)
+            # Plan B (como en la app): lo que no tiene su id apuntado se reconoce por título y álbum.
+            loose: dict[str, str] = {}
+            for e in entries:
+                loose.setdefault(f"{norm(e.get('title', ''))}|{norm(e.get('album', ''))}", e["id"])
             seen: set[str] = set()
             imported = []
-            for key in data["order"]:
-                tid = all_matches.get(key)
+            for item in data["order"]:
+                tid = all_matches.get(item["key"]) or loose.get(f"{norm(item['title'])}|{norm(item['album'])}")
                 if tid and tid in current_set and tid not in seen:
                     seen.add(tid)
                     imported.append(tid)

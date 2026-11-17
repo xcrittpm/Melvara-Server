@@ -367,7 +367,8 @@ class FakeNavidrome:
         elif ep == "getPlaylists":
             ok["playlists"] = {"playlist": [{"id": k, "name": v["name"], "owner": v["owner"]} for k, v in self.playlists.items()]}
         elif ep == "getPlaylist":
-            ok["playlist"] = {"entry": [{"id": i} for i in self.playlists[params["id"]]["ids"]]}
+            byid = {x["id"]: x for x in self.songs}
+            ok["playlist"] = {"entry": [byid.get(i, {"id": i}) for i in self.playlists[params["id"]]["ids"]]}
         elif ep == "createPlaylist":
             ids = [v for k, v in pairs if k == "songId"]
             if "playlistId" in params:
@@ -401,7 +402,9 @@ def test_importacion_en_el_servidor():
         ],
         "library": ["k1", "k2", "k3", "k4"],
         "playlists": [{"name": "Favoritas", "keys": ["k3", "k1"]}],
-        "reorderLibrary": True, "order": ["k3", "k2", "k1"],
+        # «Otra» ya estaba en la biblioteca (de una importación antigua, sin su id apuntado): se reconoce por
+        # título y álbum y va en su sitio, al final, en vez de quedarse delante.
+        "reorderLibrary": True, "order": ["k3", "k2", "k1", {"key": "k9", "title": "Otra", "album": "X"}],
     }
     with c:
         job = c.post("/api/v1/import/jobs", json=body, headers=headers("ana")).json()["job"]
@@ -416,7 +419,7 @@ def test_importacion_en_el_servidor():
     assert r["found"] == 3 and r["missing"] == ["k4"] and r["addedToLibrary"] == 3 and r["playlistsCreated"] == 1
     assert r["matches"] == {"k1": "s1", "k2": "s3", "k3": "s5"}   # versión exacta y álbum correcto
     # Biblioteca: lo que ya tenía primero y lo importado en el orden del proveedor.
-    assert fake.playlists["p1"]["ids"] == ["s9", "s5", "s3", "s1"] and r["reordered"] is True
+    assert fake.playlists["p1"]["ids"] == ["s5", "s3", "s1", "s9"] and r["reordered"] is True
     assert fake.playlists["p2"] == {"name": "Favoritas", "owner": "ana", "ids": ["s5", "s1"]}
     # Nadie más ve tu importación.
     assert c.get(f"/api/v1/import/jobs/{job['id']}", headers=headers("pepe")).status_code == 404
