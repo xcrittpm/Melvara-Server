@@ -466,7 +466,7 @@ def test_biblioteca_en_una_sola_linea_de_tiempo():
     import time as _t
     import httpx as _h
     fake = FakeNavidrome()
-    fake.songs[5]["created"] = "2020-01-01T00:00:00Z"                     # s9: llegó al servidor hace años
+    fake.songs[5]["created"] = "2099-01-01T00:00:00Z"                     # s9: sin fecha (aunque llegara «ayer»)
     fake.playlists["p1"]["ids"] = ["s9", "s4"]                             # s4: añadida en Melvara con el +
     tmp = tempfile.mkdtemp()
     db = os.path.join(tmp, "s.sqlite")
@@ -491,7 +491,7 @@ def test_biblioteca_en_una_sola_linea_de_tiempo():
                 break
             _t.sleep(0.05)
     assert job["status"] == "done", job
-    # s9 (2020) · Despacito (antes de ayer, Apple Music) · s4 (ayer, Melvara) · Tusa (hoy, Apple Music)
+    # s9 (sin fecha: con las más antiguas) · Despacito (antes de ayer, Apple Music) · s4 (ayer, Melvara) · Tusa (hoy)
     assert fake.playlists["p1"]["ids"] == ["s9", "s3", "s4", "s1"]
 
 

@@ -59,17 +59,6 @@ def norm(s: str) -> str:
     return " ".join(tokens(s))
 
 
-def _epoch(value) -> int:
-    """Fecha ISO de Navidrome («2024-05-01T10:00:00.123Z») → segundos desde 1970; 0 si no hay."""
-    if not value:
-        return 0
-    try:
-        from datetime import datetime
-        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
-    except ValueError:
-        return 0
-
-
 # ------------------------------------------------------------------ Navidrome como la persona
 
 
@@ -418,17 +407,17 @@ class ImportJobs:
             # Se devuelven a la app: la próxima vez ya están apuntadas.
             library_matches = resolved
 
+            # Sin fecha (ni del proveedor ni de Melvara): 0, con las más antiguas (al final de «Añadido
+            # recientemente»), en el orden que ya tenían. Igual que LibraryDates.sortDate en la app.
             def sort_date(entry: dict) -> int:
                 known = [d for d in (provider_date.get(entry["id"]), data["libraryDates"].get(entry["id"])) if d and d > 0]
-                if known:
-                    return min(known)
-                return _epoch(entry.get("created"))
+                return min(known) if known else 0
 
             desired = [e["id"] for e in sorted(entries, key=sort_date)]  # sorted es estable: empates, como estaban
             by_provider = sum(1 for e in entries if e["id"] in provider_date)
             by_melvara = sum(1 for e in entries if e["id"] not in provider_date and data["libraryDates"].get(e["id"]))
-            log.info("Importación %d: ordena %d canciones (fecha del proveedor %d, de Melvara %d, de llegada al "
-                     "servidor %d); orden del proveedor recibido: %d", job_id, len(entries), by_provider, by_melvara,
+            log.info("Importación %d: ordena %d canciones (fecha del proveedor %d, de Melvara %d, sin fecha y al "
+                     "final %d); orden del proveedor recibido: %d", job_id, len(entries), by_provider, by_melvara,
                      len(entries) - by_provider - by_melvara, len(data["order"]))
             if desired != current:
                 await nd.rewrite_playlist(library_id, desired)
