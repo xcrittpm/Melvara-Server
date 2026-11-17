@@ -604,3 +604,63 @@ def test_navidrome_ocupado_se_reintenta():
         assert locked["left"] == 0 and fake.playlists["p1"]["ids"] == ["s9", "s3"]   # añadida una sola vez
     finally:
         Navidrome.BUSY_RETRY_DELAYS = old
+
+
+def test_social_personas_y_lo_que_escuchan():
+    import json as _j
+    import httpx as _h
+    from app.social import Social
+    profiles = {
+        "ana": {"following": ["pepe", "luis", "eva"], "accepted": [], "isPrivate": False},
+        "pepe": {"following": ["ana"], "accepted": []},                      # mutuo con ana
+        "luis": {"following": [], "accepted": []},                           # ana le sigue, él no
+        "eva": {"following": ["ana"], "isPrivate": True, "accepted": []},    # privada: no ha aceptado a ana
+    }
+
+    def handler(request):
+        playlists = [{"id": f"p-{u}", "name": "Melvara · Perfil", "owner": u, "public": True,
+                      "comment": _j.dumps(p)} for u, p in profiles.items()]
+        return _h.Response(200, json={"subsonic-response": {"status": "ok", "playlists": {"playlist": playlists}}})
+
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    social = Social(db, "http://navidrome.invalid", transport=_h.MockTransport(handler))
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db),
+                   social=social)
+    c = TestClient(main.app)
+    assert c.get("/api/v1/status").json()["social"] is True
+    # Personas: quien usa Melvara con este servidor (cualquier petición cuenta); los ocultos no salen.
+    for u in ("ana", "pepe", "luis", "eva", "oculto"):
+        c.get("/api/v1/social/people", headers=headers(u))
+    c.post("/api/v1/social/visibility", json={"hidden": True}, headers=headers("oculto"))
+    assert c.get("/api/v1/social/people", headers=headers("ana")).json()["people"] == ["eva", "luis", "pepe"]
+
+    song = {"id": "s1", "title": "Tusa", "artist": "KAROL G", "duration": 200000}
+    # Pepe comparte y escucha; ana aún no comparte: no ve nada.
+    c.post("/api/v1/social/listening/share", json={"share": True}, headers=headers("pepe"))
+    c.post("/api/v1/social/listening", json={"track": song}, headers=headers("pepe"))
+    assert c.get("/api/v1/social/listening", headers=headers("ana")).json() == {"sharing": False, "friends": []}
+    # Ana comparte: ve a pepe (mutuo) escuchando.
+    c.post("/api/v1/social/listening/share", json={"share": True}, headers=headers("ana"))
+    friends = c.get("/api/v1/social/listening", headers=headers("ana")).json()["friends"]
+    assert [f["user"] for f in friends] == ["pepe"] and friends[0]["nowPlaying"]["title"] == "Tusa"
+    # Luis y eva comparten, pero no son mutuos con ana (luis no la sigue; eva no la ha aceptado).
+    for u in ("luis", "eva"):
+        c.post("/api/v1/social/listening/share", json={"share": True}, headers=headers(u))
+        c.post("/api/v1/social/listening", json={"track": song}, headers=headers(u))
+    social._profiles.clear()
+    assert [f["user"] for f in c.get("/api/v1/social/listening", headers=headers("ana")).json()["friends"]] == ["pepe"]
+    # Las 5 últimas, sin repetir.
+    for i in range(7):
+        c.post("/api/v1/social/listening", json={"track": {"id": f"t{i}", "title": f"T{i}"}}, headers=headers("pepe"))
+    pepe = c.get("/api/v1/social/listening", headers=headers("ana")).json()["friends"][0]
+    assert [t["id"] for t in pepe["recent"]] == ["t6", "t5", "t4", "t3", "t2"]
+    # Pepe deja de compartir: desaparece y se borra lo suyo.
+    c.post("/api/v1/social/listening/share", json={"share": False}, headers=headers("pepe"))
+    assert c.get("/api/v1/social/listening", headers=headers("ana")).json()["friends"] == []
+    # Un bloqueo corta lo mutuo.
+    c.post("/api/v1/social/listening/share", json={"share": True}, headers=headers("pepe"))
+    c.post("/api/v1/social/listening", json={"track": song}, headers=headers("pepe"))
+    profiles["pepe"]["blocked"] = ["ana"]
+    social._profiles.clear()
+    assert c.get("/api/v1/social/listening", headers=headers("ana")).json()["friends"] == []

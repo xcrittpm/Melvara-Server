@@ -20,6 +20,7 @@ from .extras import ExtraLists
 from .importer import ImportJobs
 from .jam import Jams
 from .reports import Reports
+from .social import Social
 from .wishlist import Wishlist
 
 logging.basicConfig(
@@ -46,6 +47,7 @@ class State:
     extras: ExtraLists | None = None
     imports: ImportJobs | None = None
     jams: Jams = Jams()
+    social: Social | None = None
 
 
 state = State()
@@ -53,8 +55,9 @@ state = State()
 
 def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "",
               reports: Reports | None = None, extras: ExtraLists | None = None,
-              imports: ImportJobs | None = None) -> None:
+              imports: ImportJobs | None = None, social: Social | None = None) -> None:
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
+    state.social = social
     state.reports = reports
     state.extras = extras
     state.imports = imports
@@ -88,6 +91,7 @@ async def lifespan(app):
             Reports(database),
             ExtraLists(database),
             ImportJobs(database, os.environ["NAVIDROME_URL"]),
+            Social(database, os.environ["NAVIDROME_URL"]),
         )
         if state.service_token and len(state.service_token) < 32:
             log.warning("SERVICE_TOKEN tiene menos de 32 caracteres: la ruta de servicio queda desactivada")
@@ -119,6 +123,8 @@ def protected(handler):
         if username is None:
             return _error(401, "Este acceso no es válido en Navidrome")
         request.state.access = (user, token, salt)
+        if state.social is not None:
+            state.social.seen(username)
         try:
             result = await handler(request, username)
         except PermissionError as e:
@@ -146,7 +152,7 @@ async def status(request: Request):
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.lastfm.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
-                         "imports": state.imports is not None, "jam": True, "jamControl": True},
+                         "imports": state.imports is not None, "jam": True, "jamControl": True, "social": state.social is not None},
                         headers=SECURITY_HEADERS)
 
 
@@ -454,6 +460,54 @@ async def jam_action(request: Request, user: str):
     return None
 
 
+# ------------------------------------------------------------------ social
+
+
+def _social() -> Social:
+    if state.social is None:
+        raise LookupError("Este servidor no tiene activada la parte social")
+    return state.social
+
+
+async def social_people(request: Request, user: str):
+    return {"people": _social().people(user)}
+
+
+async def social_visibility(request: Request, user: str):
+    body = await _body(request)
+    hidden = body.get("hidden")
+    if not isinstance(hidden, bool):
+        raise ValueError("hidden debe ser true o false")
+    _social().set_hidden(user, hidden)
+    return {"hidden": hidden}
+
+
+async def social_listening(request: Request, user: str):
+    social = _social()
+    if request.method == "GET":
+        try:
+            profiles = await social.profiles(user, request.state.access)
+        except Exception as e:  # noqa: BLE001 (Navidrome no responde: sin amigos esta vez)
+            log.warning("Social: no se pudieron leer los perfiles de %s: %s", user, e)
+            return {"sharing": social.sharing(user), "friends": []}
+        return social.friends_listening(user, profiles)
+    body = await _body(request)
+    if body.get("stopped") is True:
+        social.stopped(user)
+    else:
+        social.played(user, body.get("track"))
+    return {"ok": True}
+
+
+async def social_share(request: Request, user: str):
+    body = await _body(request)
+    share = body.get("share")
+    if not isinstance(share, bool):
+        raise ValueError("share debe ser true o false")
+    _social().set_share(user, share)
+    return {"share": share}
+
+
 app = Starlette(
     routes=[
         Route("/health", health),
@@ -466,6 +520,10 @@ app = Starlette(
         Route("/api/v1/reports", protected(reports), methods=["GET", "POST"]),
         Route("/api/v1/charts/extra", protected(extra_lists), methods=["GET", "POST"]),
         Route("/api/v1/import/jobs", protected(import_jobs), methods=["GET", "POST"]),
+        Route("/api/v1/social/people", protected(social_people), methods=["GET"]),
+        Route("/api/v1/social/visibility", protected(social_visibility), methods=["POST"]),
+        Route("/api/v1/social/listening", protected(social_listening), methods=["GET", "POST"]),
+        Route("/api/v1/social/listening/share", protected(social_share), methods=["POST"]),
         Route("/api/v1/jam", protected(jam_start), methods=["POST"]),
         Route("/api/v1/jam/{code}", protected(jam_item), methods=["GET", "DELETE"]),
         Route("/api/v1/jam/{code}/{action}", protected(jam_action), methods=["GET", "POST"]),
