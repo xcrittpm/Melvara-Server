@@ -72,19 +72,37 @@ class Navidrome:
     async def close(self) -> None:
         await self.client.aclose()
 
+    # Si Navidrome tiene la base de datos ocupada (p. ej. escaneando la biblioteca), se espera y se repite:
+    # «database is locked» quiere decir que no ha guardado nada, así que repetir no duplica canciones.
+    BUSY_RETRY_DELAYS = (2, 4, 8, 15, 30, 60, 60)  # unos 3 minutos en total (un escaneo puede tardar)
+
+    @staticmethod
+    def _is_busy(message: str) -> bool:
+        m = message.lower()
+        return "database is locked" in m or "database is busy" in m or "sqlite_busy" in m
+
     async def call(self, endpoint: str, params: list[tuple[str, str]] | None = None, post: bool = False) -> dict:
         data = list(self.auth.items()) + (params or [])
         url = f"{self.base}/rest/{endpoint}.view"
-        if post:
-            # En el cuerpo: con miles de canciones la dirección sería enorme.
-            resp = await self.client.post(url, content=urlencode(data),
-                                          headers={"Content-Type": "application/x-www-form-urlencoded"})
-        else:
-            resp = await self.client.get(url, params=data)
-        body = resp.json().get("subsonic-response", {})
-        if body.get("status") != "ok":
-            raise RuntimeError((body.get("error") or {}).get("message") or f"Navidrome: error en {endpoint}")
-        return body
+        for delay in (*self.BUSY_RETRY_DELAYS, None):
+            if post:
+                # En el cuerpo: con miles de canciones la dirección sería enorme.
+                resp = await self.client.post(url, content=urlencode(data),
+                                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+            else:
+                resp = await self.client.get(url, params=data)
+            try:
+                body = resp.json().get("subsonic-response", {})
+            except ValueError:
+                body = {"error": {"message": resp.text[:200] or f"HTTP {resp.status_code}"}}
+            if body.get("status") == "ok":
+                return body
+            message = (body.get("error") or {}).get("message") or f"Navidrome: error en {endpoint}"
+            if delay is None or not self._is_busy(message):
+                raise RuntimeError(message)
+            log.info("Navidrome ocupado en %s (%s): se repite en %d s", endpoint, message, delay)
+            await asyncio.sleep(delay)
+        raise RuntimeError(f"Navidrome: error en {endpoint}")
 
     async def search(self, query: str) -> list[dict]:
         body = await self.call("search3", [("query", query), ("artistCount", "0"), ("albumCount", "0"),

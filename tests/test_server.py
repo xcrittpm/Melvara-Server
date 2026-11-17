@@ -565,3 +565,42 @@ def test_escuchar_en_grupo():
     # Cerrar: se acaba para todos.
     assert c.delete(f"/api/v1/jam/{code}", headers=headers("ana")).json()["ended"] is True
     assert c.get(f"/api/v1/jam/{code}", headers=headers("ana")).status_code == 404
+
+
+def test_navidrome_ocupado_se_reintenta():
+    """«database is locked» al añadir a la biblioteca: se espera y se repite en vez de parar la importación."""
+    import time as _t
+    import httpx as _h
+    from app.importer import Navidrome
+    fake = FakeNavidrome()
+    real = fake.handler
+    locked = {"left": 2}
+
+    def busy(request):
+        if "updatePlaylist" in request.url.path and locked["left"] > 0:
+            locked["left"] -= 1
+            return _h.Response(200, json={"subsonic-response": {"status": "failed", "error": {
+                "code": 0, "message": "Internal Server Error: database is locked"}}})
+        return real(request)
+
+    old = Navidrome.BUSY_RETRY_DELAYS
+    Navidrome.BUSY_RETRY_DELAYS = (0, 0, 0)
+    try:
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "s.sqlite")
+        main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db),
+                       ImportJobs(db, "http://navidrome.invalid", transport=_h.MockTransport(busy)))
+        c = TestClient(main.app)
+        body = {"songs": [{"key": "k2", "title": "Despacito", "artist": "Luis Fonsi", "album": "VIDA"}],
+                "library": ["k2"]}
+        with c:
+            job = c.post("/api/v1/import/jobs", json=body, headers=headers("ana")).json()["job"]
+            for _ in range(100):
+                job = c.get(f"/api/v1/import/jobs/{job['id']}", headers=headers("ana")).json()["job"]
+                if job["status"] != "running":
+                    break
+                _t.sleep(0.05)
+        assert job["status"] == "done", job
+        assert locked["left"] == 0 and fake.playlists["p1"]["ids"] == ["s9", "s3"]   # añadida una sola vez
+    finally:
+        Navidrome.BUSY_RETRY_DELAYS = old
