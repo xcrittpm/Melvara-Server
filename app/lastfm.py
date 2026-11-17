@@ -117,19 +117,36 @@ class LastFM:
         except ValueError:
             return {"error": resp.status_code, "message": "Last.fm no respondió bien"}
 
-    async def charts(self, country: str | None, limit: int = 100) -> list[dict]:
-        """Lo más escuchado en Last.fm: en el mundo o en un país (nombre en inglés, p. ej. «spain»)."""
-        if country:
+    async def charts(self, country: str | None, limit: int = 100, kind: str | None = None,
+                     value: str | None = None) -> list[dict]:
+        """Lo más escuchado en Last.fm: en el mundo, en un país (nombre en inglés, p. ej. «spain»), con una
+        etiqueta (`kind="tag"`), de un usuario de Last.fm (`"user"`, últimos 3 meses) o de un artista."""
+        if kind == "tag":
+            data = await self._call("tag.gettoptracks", tag=value or "", limit=str(limit))
+        elif kind == "user":
+            data = await self._call("user.gettoptracks", user=value or "", period="3month", limit=str(limit))
+        elif kind == "artist":
+            data = await self._call("artist.gettoptracks", artist=value or "", autocorrect="1", limit=str(limit))
+        elif country:
             data = await self._call("geo.gettoptracks", country=country, limit=str(limit))
         else:
             data = await self._call("chart.gettoptracks", limit=str(limit))
-        tracks = data.get("tracks", {}).get("track", []) or []
+        if "error" in data:
+            raise ValueError(data.get("message") or "Last.fm no encontró esa lista")
+        tracks = (data.get("tracks") or data.get("toptracks") or {}).get("track", []) or []
+        if isinstance(tracks, dict):  # Last.fm devuelve un objeto suelto si solo hay una
+            tracks = [tracks]
         return [{"title": t.get("name", ""), "artist": (t.get("artist") or {}).get("name", "")}
                 for t in tracks if t.get("name")][:limit]
 
     async def _call(self, method: str, **params) -> dict:
         resp = await self._client.get(API, params={"method": method, "api_key": self.api_key, "format": "json", **params})
-        resp.raise_for_status()
+        # Last.fm responde 4xx con un JSON de error (p. ej. «User not found»): se devuelve para explicarlo.
+        if resp.status_code >= 400:
+            try:
+                return resp.json()
+            except ValueError:
+                resp.raise_for_status()
         return resp.json()
 
     async def search(self, query: str, limit: int = 30) -> list[dict]:

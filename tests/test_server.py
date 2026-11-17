@@ -11,6 +11,7 @@ from starlette.testclient import TestClient  # noqa: E402
 from app import main  # noqa: E402
 from app.auth import Auth, RateLimiter  # noqa: E402
 from app.lastfm import LastFM  # noqa: E402
+from app.extras import ExtraLists  # noqa: E402
 from app.reports import Reports  # noqa: E402
 from app.wishlist import Wishlist  # noqa: E402
 
@@ -31,8 +32,10 @@ class FakeLastFM(LastFM):
         super().__init__(key, "secreto" if key else "")
         self.sent = None
 
-    async def charts(self, country, limit=100):
-        return [{"title": "Tusa", "artist": "KAROL G", "country": country}]
+    async def charts(self, country, limit=100, kind=None, value=None):
+        if kind and value == "nada":
+            return []
+        return [{"title": "Tusa", "artist": "KAROL G", "country": country, "kind": kind, "value": value}]
 
     async def search(self, query, limit=30):
         return [{"title": "Tan Lines", "artist": "C Marí", "album": "Sempre Cor", "year": None, "listeners": 1, "url": None}]
@@ -45,7 +48,7 @@ def make_client(lastfm_key="clave", per_minute=100, service_token=""):
     tmp = tempfile.mkdtemp()
     db = os.path.join(tmp, "s.sqlite")
     main.configure(FakeAuth(), RateLimiter(per_minute), Wishlist(db), FakeLastFM(lastfm_key),
-                   service_token, Reports(db))
+                   service_token, Reports(db), ExtraLists(db))
     return TestClient(main.app)
 
 
@@ -306,3 +309,27 @@ def test_denuncias_las_ve_solo_un_administrador():
     assert c.get("/api/v1/reports", headers=headers("admin")).json()["items"] == []
     assert len(c.get("/api/v1/reports", params={"all": "1"}, headers=headers("admin")).json()["items"]) == 1
     assert c.patch("/api/v1/reports/999", headers=headers("admin")).status_code == 404
+
+
+def test_listas_extra_las_pone_un_administrador_y_las_ven_todos():
+    c = make_client()
+    assert c.get("/api/v1/status").json()["extraLists"] is True
+    nueva = {"kind": "tag", "value": "reggaeton", "title": "Reggaeton"}
+    assert c.post("/api/v1/charts/extra", json=nueva, headers=headers("ana")).status_code == 403
+    r = c.post("/api/v1/charts/extra", json=nueva, headers=headers("admin"))
+    assert r.status_code == 200 and r.json()["item"]["title"] == "Reggaeton"
+    item_id = r.json()["item"]["id"]
+    assert c.post("/api/v1/charts/extra", json=nueva, headers=headers("admin")).status_code == 400  # repetida
+    assert c.post("/api/v1/charts/extra", json={"kind": "tag", "value": "nada"}, headers=headers("admin")).status_code == 400
+    assert c.post("/api/v1/charts/extra", json={"kind": "otra", "value": "x"}, headers=headers("admin")).status_code == 400
+    # La ven todos.
+    assert [i["value"] for i in c.get("/api/v1/charts/extra", headers=headers("ana")).json()["items"]] == ["reggaeton"]
+    # Sus canciones, por la ruta de siempre.
+    tracks = c.get("/api/v1/lastfm/charts", params={"kind": "tag", "value": "reggaeton"}, headers=headers("ana")).json()["tracks"]
+    assert tracks[0]["kind"] == "tag" and tracks[0]["value"] == "reggaeton"
+    # Cambiar y borrar: solo administradores.
+    cambio = {"kind": "tag", "value": "reggaeton", "title": "Reggaetón"}
+    assert c.patch(f"/api/v1/charts/extra/{item_id}", json=cambio, headers=headers("ana")).status_code == 403
+    assert c.patch(f"/api/v1/charts/extra/{item_id}", json=cambio, headers=headers("admin")).json()["item"]["title"] == "Reggaetón"
+    assert c.delete(f"/api/v1/charts/extra/{item_id}", headers=headers("admin")).json()["deleted"] is True
+    assert c.get("/api/v1/charts/extra", headers=headers("ana")).json()["items"] == []

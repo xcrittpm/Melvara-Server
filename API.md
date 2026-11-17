@@ -16,6 +16,9 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | POST | `/api/v1/reports` | usuario de Navidrome | Denunciar a una persona o una playlist compartida |
 | GET | `/api/v1/reports` | administrador de Navidrome | Ver las denuncias sin revisar (`?all=1`: también las revisadas) |
 | PATCH | `/api/v1/reports/{id}` | administrador de Navidrome | Marcar una denuncia como revisada |
+| GET | `/api/v1/charts/extra` | usuario de Navidrome | Listas extra de Last.fm que ha añadido el administrador |
+| POST | `/api/v1/charts/extra` | administrador de Navidrome | Añadir una lista extra (`kind`: `tag`, `user` o `artist`; `value`; `title`) |
+| PATCH / DELETE | `/api/v1/charts/extra/{id}` | administrador de Navidrome | Cambiarla o quitarla |
 | GET | `/api/v1/service/wishlist` | token de servicio | Leer las listas de **todos** (otras aplicaciones) |
 | PATCH | `/api/v1/service/wishlist/{id}` | token de servicio | Cambiar el estado de un deseo (p. ej. «en la biblioteca») |
 | GET | `/api/v1/lastfm/search?q=` | usuario de Navidrome | Buscar canciones en Last.fm |
@@ -156,6 +159,25 @@ curl "${H[@]}" -X PATCH https://musica-api.ejemplo.com/api/v1/reports/3
 ```
 
 `/api/v1/status` dice `"reports": true` cuando el servidor las recoge.
+
+## Listas extra de Last.fm
+
+Además de los Top por país, quien administra Navidrome puede añadir listas para todas las personas del
+servidor (Melvara → Ajustes → Administración → Listas extra). Solo se guarda qué lista es; las canciones se
+piden a Last.fm al abrirla, por la ruta de siempre:
+
+```bash
+curl "${H[@]}" "https://musica-api.ejemplo.com/api/v1/lastfm/charts?kind=tag&value=reggaeton"
+```
+
+| `kind` | Qué es | Método de Last.fm |
+|---|---|---|
+| `tag` | Lo más escuchado con esa etiqueta («reggaeton», «80s», «indie»…) | `tag.gettoptracks` |
+| `user` | Lo más escuchado por ese usuario de Last.fm en los últimos 3 meses | `user.gettoptracks` |
+| `artist` | Lo más escuchado de ese artista | `artist.gettoptracks` |
+
+Al añadir o cambiar una, el servidor comprueba que Last.fm la tiene y no está vacía. Como mucho 50.
+`/api/v1/status` dice `"extraLists": true` cuando el servidor las admite (desde la 2.6).
 
 ## Ruta de servicio: las listas de todos
 

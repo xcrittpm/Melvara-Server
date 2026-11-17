@@ -16,6 +16,7 @@ from starlette.routing import Route
 from . import __version__
 from .auth import Auth, RateLimiter
 from .lastfm import LastFM
+from .extras import ExtraLists
 from .reports import Reports
 from .wishlist import Wishlist
 
@@ -40,15 +41,17 @@ class State:
     wishlist: Wishlist
     lastfm: LastFM
     reports: Reports | None = None
+    extras: ExtraLists | None = None
 
 
 state = State()
 
 
 def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "",
-              reports: Reports | None = None) -> None:
+              reports: Reports | None = None, extras: ExtraLists | None = None) -> None:
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
     state.reports = reports
+    state.extras = extras
     state.service_token = service_token.strip()
 
 
@@ -77,6 +80,7 @@ async def lifespan(app):
             LastFM(os.environ.get("LASTFM_API_KEY", ""), os.environ.get("LASTFM_SHARED_SECRET", "")),
             os.environ.get("SERVICE_TOKEN", ""),
             Reports(database),
+            ExtraLists(database),
         )
         if state.service_token and len(state.service_token) < 32:
             log.warning("SERVICE_TOKEN tiene menos de 32 caracteres: la ruta de servicio queda desactivada")
@@ -132,7 +136,7 @@ async def status(request: Request):
     # Público (sin datos): la app lo usa para saber que aquí hay un Melvara Server.
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.lastfm.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token),
-                         "reports": state.reports is not None},
+                         "reports": state.reports is not None, "extraLists": state.extras is not None},
                         headers=SECURITY_HEADERS)
 
 
@@ -151,7 +155,11 @@ async def charts(request: Request, user: str):
     country = request.query_params.get("country", "").strip().lower() or None
     if country and len(country) > 60:
         raise ValueError("País no válido")
-    return {"tracks": await state.lastfm.charts(country)}
+    kind = request.query_params.get("kind", "").strip().lower() or None
+    value = request.query_params.get("value", "").strip() or None
+    if kind:
+        kind, value, _ = ExtraLists.clean(kind, value or "", "")
+    return {"tracks": await state.lastfm.charts(country, kind=kind, value=value)}
 
 
 async def lastfm_call(request: Request, user: str):
@@ -306,6 +314,62 @@ async def report_item(request: Request, user: str):
     return {"item": item} if item else None
 
 
+# ------------------------------------------------------------------ listas extra
+
+
+def _extras() -> ExtraLists:
+    if state.extras is None:
+        raise ValueError("Las listas extra no están activadas en este servidor")
+    return state.extras
+
+
+async def _body(request: Request) -> dict:
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except json.JSONDecodeError:
+        raise ValueError("Datos no válidos")
+    if not isinstance(body, dict):
+        raise ValueError("Datos no válidos")
+    return body
+
+
+async def _check_lastfm(kind: str, value: str) -> None:
+    """Antes de guardar una lista: que Last.fm la tenga y no esté vacía."""
+    if not state.lastfm.enabled:
+        raise ValueError("Este servidor no tiene configurado Last.fm")
+    if not await state.lastfm.charts(None, limit=5, kind=kind, value=value):
+        raise ValueError("Last.fm no tiene canciones para esa lista")
+
+
+async def extra_lists(request: Request, user: str):
+    if request.method == "GET":
+        return {"items": _extras().list()}
+    _require_admin(request)
+    body = await _body(request)
+    kind, value, title = ExtraLists.clean(str(body.get("kind", "")), str(body.get("value", "")), str(body.get("title", "")))
+    await _check_lastfm(kind, value)
+    item = _extras().add(kind, value, title, user)
+    log.info("Lista extra %d: %s %s («%s») por %s", item["id"], kind, value, title, user)
+    return {"item": item}
+
+
+async def extra_list_item(request: Request, user: str):
+    _require_admin(request)
+    try:
+        item_id = int(request.path_params["id"])
+    except ValueError:
+        raise ValueError("Identificador no válido")
+    if request.method == "DELETE":
+        return {"deleted": True} if _extras().remove(item_id) else None
+    body = await _body(request)
+    kind, value, title = ExtraLists.clean(str(body.get("kind", "")), str(body.get("value", "")), str(body.get("title", "")))
+    current = _extras().get(item_id)
+    if current and (current["kind"], current["value"]) != (kind, value):
+        await _check_lastfm(kind, value)
+    item = _extras().update(item_id, kind, value, title)
+    return {"item": item} if item else None
+
+
 app = Starlette(
     routes=[
         Route("/health", health),
@@ -316,6 +380,8 @@ app = Starlette(
         Route("/api/v1/wishlist", protected(wishlist), methods=["GET", "POST"]),
         Route("/api/v1/wishlist/{id}", protected(wishlist_item), methods=["DELETE"]),
         Route("/api/v1/reports", protected(reports), methods=["GET", "POST"]),
+        Route("/api/v1/charts/extra", protected(extra_lists), methods=["GET", "POST"]),
+        Route("/api/v1/charts/extra/{id}", protected(extra_list_item), methods=["PATCH", "DELETE"]),
         Route("/api/v1/reports/{id}", protected(report_item), methods=["PATCH"]),
         Route("/api/v1/service/wishlist", service_wishlist, methods=["GET"]),
         Route("/api/v1/service/wishlist/{id}", service_wishlist_item, methods=["PATCH"]),
