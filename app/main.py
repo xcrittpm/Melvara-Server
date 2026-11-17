@@ -18,6 +18,7 @@ from .auth import Auth, RateLimiter
 from .lastfm import LastFM
 from .extras import ExtraLists
 from .importer import ImportJobs
+from .jam import Jams
 from .reports import Reports
 from .wishlist import Wishlist
 
@@ -44,6 +45,7 @@ class State:
     reports: Reports | None = None
     extras: ExtraLists | None = None
     imports: ImportJobs | None = None
+    jams: Jams = Jams()
 
 
 state = State()
@@ -121,6 +123,8 @@ def protected(handler):
             result = await handler(request, username)
         except PermissionError as e:
             return _error(403, str(e) or "Solo para administradores")
+        except LookupError as e:
+            return _error(404, str(e) or "No encontrado")
         except ValueError as e:
             return _error(400, str(e) or "Petición no válida")
         if result is None:
@@ -142,7 +146,7 @@ async def status(request: Request):
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.lastfm.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
-                         "imports": state.imports is not None},
+                         "imports": state.imports is not None, "jam": True},
                         headers=SECURITY_HEADERS)
 
 
@@ -404,6 +408,47 @@ async def import_job(request: Request, user: str):
     return {"job": job} if job else None
 
 
+# ------------------------------------------------------------------ escuchar en grupo
+
+
+async def jam_start(request: Request, user: str):
+    return {"jam": state.jams.start(user)}
+
+
+async def jam_item(request: Request, user: str):
+    code = request.path_params["code"]
+    if request.method == "DELETE":
+        state.jams.end(code, user)
+        return {"ended": True}
+    return {"jam": state.jams.state(code, user)}
+
+
+async def jam_action(request: Request, user: str):
+    code, action = request.path_params["code"], request.path_params["action"]
+    body = await _body(request) if request.method == "POST" else {}
+    if action == "join":
+        return {"jam": state.jams.join(code, user)}
+    if action == "leave":
+        state.jams.leave(code, user)
+        return {"left": True}
+    if action == "add":
+        tracks = body.get("tracks")
+        return state.jams.add(code, user, tracks if isinstance(tracks, list) else [])
+    if action == "pending":
+        try:
+            after = int(request.query_params.get("after", "0"))
+        except ValueError:
+            after = 0
+        return state.jams.pending(code, user, after)
+    if action == "state":
+        queue = body.get("queue")
+        state.jams.update(code, user, body.get("nowPlaying"), queue if isinstance(queue, list) else [])
+        return {"ok": True}
+    if action == "kick":
+        return {"jam": state.jams.kick(code, user, str(body.get("user", "")))}
+    return None
+
+
 app = Starlette(
     routes=[
         Route("/health", health),
@@ -416,6 +461,9 @@ app = Starlette(
         Route("/api/v1/reports", protected(reports), methods=["GET", "POST"]),
         Route("/api/v1/charts/extra", protected(extra_lists), methods=["GET", "POST"]),
         Route("/api/v1/import/jobs", protected(import_jobs), methods=["GET", "POST"]),
+        Route("/api/v1/jam", protected(jam_start), methods=["POST"]),
+        Route("/api/v1/jam/{code}", protected(jam_item), methods=["GET", "DELETE"]),
+        Route("/api/v1/jam/{code}/{action}", protected(jam_action), methods=["GET", "POST"]),
         Route("/api/v1/import/jobs/{id}", protected(import_job), methods=["GET", "DELETE"]),
         Route("/api/v1/charts/extra/{id}", protected(extra_list_item), methods=["PATCH", "DELETE"]),
         Route("/api/v1/reports/{id}", protected(report_item), methods=["PATCH"]),

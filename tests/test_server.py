@@ -514,3 +514,34 @@ def test_reconoce_tu_biblioteca_aunque_los_titulos_no_sean_identicos():
     assert got == {"k1": "a", "k2": "b", "k3": "e"}
     # Lo ya sabido manda (si sigue en la biblioteca).
     assert match_library(entries, order, {"k3": "d"})["k3"] == "d"
+
+
+def test_escuchar_en_grupo():
+    c = make_client()
+    main.state.jams = main.Jams()
+    assert c.get("/api/v1/status").json()["jam"] is True
+    jam = c.post("/api/v1/jam", headers=headers("ana")).json()["jam"]
+    code = jam["code"]
+    assert jam["isHost"] is True and jam["members"] == []
+    # Sin unirse no se puede añadir; quien no tiene cuenta en Navidrome, ni entra.
+    assert c.post(f"/api/v1/jam/{code}/add", json={"tracks": [{"id": "s1"}]}, headers=headers("pepe")).status_code == 403
+    assert c.post(f"/api/v1/jam/{code}/join", headers=headers("pepe", token="malo")).status_code == 401
+    assert c.post(f"/api/v1/jam/{code}/join", headers=headers("pepe")).json()["jam"]["members"] == ["pepe"]
+    added = c.post(f"/api/v1/jam/{code}/add", json={"tracks": [{"id": "s1", "title": "Tusa", "artist": "KAROL G"}]},
+                   headers=headers("pepe")).json()
+    assert added == {"added": 1}
+    # El anfitrión recoge lo añadido y cuenta qué suena.
+    pending = c.get(f"/api/v1/jam/{code}/pending", params={"after": 0}, headers=headers("ana")).json()
+    assert pending["adds"][0]["by"] == "pepe" and pending["adds"][0]["track"]["title"] == "Tusa"
+    assert c.get(f"/api/v1/jam/{code}/pending", params={"after": pending["seq"]}, headers=headers("ana")).json()["adds"] == []
+    assert c.get(f"/api/v1/jam/{code}/pending", headers=headers("pepe")).status_code == 403   # solo el anfitrión
+    c.post(f"/api/v1/jam/{code}/state", json={"nowPlaying": {"id": "s0", "title": "Ahora"}, "queue": [{"id": "s1", "title": "Tusa"}]},
+           headers=headers("ana"))
+    seen = c.get(f"/api/v1/jam/{code}", headers=headers("pepe")).json()["jam"]
+    assert seen["nowPlaying"]["title"] == "Ahora" and seen["queue"][0]["addedBy"] == "pepe" and seen["isHost"] is False
+    # Quitar a alguien: ya no puede volver.
+    c.post(f"/api/v1/jam/{code}/kick", json={"user": "pepe"}, headers=headers("ana"))
+    assert c.post(f"/api/v1/jam/{code}/join", headers=headers("pepe")).status_code == 403
+    # Cerrar: se acaba para todos.
+    assert c.delete(f"/api/v1/jam/{code}", headers=headers("ana")).json()["ended"] is True
+    assert c.get(f"/api/v1/jam/{code}", headers=headers("ana")).status_code == 404
