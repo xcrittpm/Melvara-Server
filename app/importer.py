@@ -381,6 +381,11 @@ class ImportJobs:
                 return _epoch(entry.get("created"))
 
             desired = [e["id"] for e in sorted(entries, key=sort_date)]  # sorted es estable: empates, como estaban
+            by_provider = sum(1 for e in entries if e["id"] in provider_date)
+            by_melvara = sum(1 for e in entries if e["id"] not in provider_date and data["libraryDates"].get(e["id"]))
+            log.info("Importación %d: ordena %d canciones (fecha del proveedor %d, de Melvara %d, de llegada al "
+                     "servidor %d); orden del proveedor recibido: %d", job_id, len(entries), by_provider, by_melvara,
+                     len(entries) - by_provider - by_melvara, len(data["order"]))
             if desired != current:
                 await nd.rewrite_playlist(library_id, desired)
                 reordered = True
