@@ -59,6 +59,17 @@ def norm(s: str) -> str:
     return " ".join(tokens(s))
 
 
+def _epoch(value) -> int:
+    """Fecha ISO de Navidrome («2024-05-01T10:00:00.123Z») → segundos desde 1970; 0 si no hay."""
+    if not value:
+        return 0
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0
+
+
 # ------------------------------------------------------------------ Navidrome como la persona
 
 
@@ -231,14 +242,18 @@ class ImportJobs:
         order = []
         for item in (body.get("order") if isinstance(body.get("order"), list) else [])[:MAX_SONGS]:
             if isinstance(item, dict) and str(item.get("key", "")).strip():
+                added = item.get("added")
                 order.append({"key": str(item["key"])[:600], "title": str(item.get("title", ""))[:300],
-                              "album": str(item.get("album") or "")[:300]})
+                              "album": str(item.get("album") or "")[:300],
+                              "added": int(added) if isinstance(added, (int, float)) else None})
             elif isinstance(item, str) and item.strip():
-                order.append({"key": item[:600], "title": "", "album": ""})
+                order.append({"key": item[:600], "title": "", "album": "", "added": None})
+        dates = body.get("libraryDates") if isinstance(body.get("libraryDates"), dict) else {}
+        library_dates = {str(k)[:100]: int(v) for k, v in list(dates.items())[:MAX_SONGS * 2] if isinstance(v, (int, float))}
         previous = body.get("previousMatches") if isinstance(body.get("previousMatches"), dict) else {}
         return {"provider": str(body.get("provider", "otro"))[:40], "songs": clean, "library": key_list(body.get("library")),
                 "playlists": playlists, "reorderLibrary": bool(body.get("reorderLibrary")),
-                "order": order,
+                "order": order, "libraryDates": library_dates,
                 "previousMatches": {str(k)[:600]: str(v)[:100] for k, v in list(previous.items())[:MAX_SONGS]}}
 
     def start(self, user: str, access: tuple[str, str, str], body: dict) -> dict:
@@ -343,22 +358,29 @@ class ImportJobs:
         all_matches = {**data["previousMatches"], **{k: v for k, v in matches.items() if v}}
         reordered = False
         # Mismo orden que en el proveedor: lo que ya tenías y no viene de ahí, primero; detrás lo importado.
+        # Una sola línea de tiempo: cada canción de tu biblioteca por la fecha en que la añadiste (en el
+        # proveedor o en Melvara con el +, la más antigua); si no se sabe, cuándo llegó a tu servidor
+        # (`created` de Navidrome). Igual que la app (LibraryDates.sortDate).
         if data["reorderLibrary"] and library_id and data["order"]:
             entries = await nd.playlist_entries(library_id)
             current = [e["id"] for e in entries]
-            current_set = set(current)
             # Plan B (como en la app): lo que no tiene su id apuntado se reconoce por título y álbum.
             loose: dict[str, str] = {}
             for e in entries:
                 loose.setdefault(f"{norm(e.get('title', ''))}|{norm(e.get('album', ''))}", e["id"])
-            seen: set[str] = set()
-            imported = []
+            provider_date: dict[str, int] = {}
             for item in data["order"]:
                 tid = all_matches.get(item["key"]) or loose.get(f"{norm(item['title'])}|{norm(item['album'])}")
-                if tid and tid in current_set and tid not in seen:
-                    seen.add(tid)
-                    imported.append(tid)
-            desired = [t for t in current if t not in seen] + imported
+                if tid and item.get("added"):
+                    provider_date[tid] = min(provider_date.get(tid, item["added"]), item["added"])
+
+            def sort_date(entry: dict) -> int:
+                known = [d for d in (provider_date.get(entry["id"]), data["libraryDates"].get(entry["id"])) if d and d > 0]
+                if known:
+                    return min(known)
+                return _epoch(entry.get("created"))
+
+            desired = [e["id"] for e in sorted(entries, key=sort_date)]  # sorted es estable: empates, como estaban
             if desired != current:
                 await nd.rewrite_playlist(library_id, desired)
                 reordered = True

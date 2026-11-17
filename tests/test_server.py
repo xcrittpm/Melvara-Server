@@ -404,7 +404,11 @@ def test_importacion_en_el_servidor():
         "playlists": [{"name": "Favoritas", "keys": ["k3", "k1"]}],
         # «Otra» ya estaba en la biblioteca (de una importación antigua, sin su id apuntado): se reconoce por
         # título y álbum y va en su sitio, al final, en vez de quedarse delante.
-        "reorderLibrary": True, "order": ["k3", "k2", "k1", {"key": "k9", "title": "Otra", "album": "X"}],
+        "reorderLibrary": True, "order": [
+            {"key": "k3", "title": "90%", "album": "Sempre Cor (Deluxe)", "added": 1_700_000_000},
+            {"key": "k2", "title": "Despacito", "album": "VIDA", "added": 1_700_000_100},
+            {"key": "k1", "title": "Tusa", "album": "KG0516", "added": 1_700_000_200},
+            {"key": "k9", "title": "Otra", "album": "X", "added": 1_700_000_300}],
     }
     with c:
         job = c.post("/api/v1/import/jobs", json=body, headers=headers("ana")).json()["job"]
@@ -454,3 +458,37 @@ def test_una_cancion_que_falla_no_para_la_importacion():
             _t.sleep(0.05)
     assert job["status"] == "done", job
     assert job["result"]["found"] == 1 and job["result"]["missing"] == ["k1"]
+
+
+def test_biblioteca_en_una_sola_linea_de_tiempo():
+    """Apple Music hoy, Melvara ayer, Apple Music antes de ayer → en ese orden (de más antigua a más nueva)."""
+    import time as _t
+    import httpx as _h
+    fake = FakeNavidrome()
+    fake.songs[5]["created"] = "2020-01-01T00:00:00Z"                     # s9: llegó al servidor hace años
+    fake.playlists["p1"]["ids"] = ["s9", "s4"]                             # s4: añadida en Melvara con el +
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db),
+                   ImportJobs(db, "http://navidrome.invalid", transport=_h.MockTransport(fake.handler)))
+    c = TestClient(main.app)
+    day = 86400
+    now = 1_800_000_000
+    body = {
+        "songs": [{"key": "k1", "title": "Tusa", "artist": "KAROL G", "album": "KG0516"},
+                  {"key": "k2", "title": "Despacito", "artist": "Luis Fonsi", "album": "VIDA"}],
+        "library": ["k1", "k2"], "reorderLibrary": True,
+        "order": [{"key": "k2", "title": "Despacito", "album": "VIDA", "added": now - 2 * day},
+                  {"key": "k1", "title": "Tusa", "album": "KG0516", "added": now}],
+        "libraryDates": {"s4": now - day},
+    }
+    with c:
+        job = c.post("/api/v1/import/jobs", json=body, headers=headers("ana")).json()["job"]
+        for _ in range(100):
+            job = c.get(f"/api/v1/import/jobs/{job['id']}", headers=headers("ana")).json()["job"]
+            if job["status"] != "running":
+                break
+            _t.sleep(0.05)
+    assert job["status"] == "done", job
+    # s9 (2020) · Despacito (antes de ayer, Apple Music) · s4 (ayer, Melvara) · Tusa (hoy, Apple Music)
+    assert fake.playlists["p1"]["ids"] == ["s9", "s3", "s4", "s1"]
