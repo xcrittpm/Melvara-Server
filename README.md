@@ -9,6 +9,13 @@ Servicio opcional que se instala junto a tu **Navidrome** para dar a la app Melv
 - **Búsqueda en Last.fm**: encontrar canciones que no tienes en tu servidor.
 - **Lista de deseos**: guardar esas canciones (título, artista, álbum y año; nunca música) para conseguirlas
   después. Cada persona ve solo la suya.
+- **Importar en el servidor**: traer tu biblioteca de Apple Music, Spotify o Plex aunque cierres la app.
+- **Listas extra** de Last.fm (por etiqueta, usuario o artista) que elige quien administra.
+- **Social**: denuncias que llegan a los administradores, la lista de personas que usan Melvara en tu servidor y
+  lo que escuchan tus seguidores mutuos (solo si lo compartís).
+- **Escuchar en grupo**: tus amigos añaden canciones a tu cola escaneando un QR.
+
+Detalle de cada llamada en [API.md](API.md).
 
 ## Seguridad
 

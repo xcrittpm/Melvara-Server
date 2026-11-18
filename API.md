@@ -1,6 +1,7 @@
 # API de Melvara Server
 
-Llamadas HTTP de Melvara Server, en especial las de la **lista de deseos**. Todas las respuestas son JSON.
+Llamadas HTTP de Melvara Server: lista de deseos, denuncias, listas extra, importaciones, Social y escuchar en
+grupo. Todas las respuestas son JSON.
 
 En los ejemplos, el servidor está en `https://musica-api.ejemplo.com` (Navidrome en `https://musica.ejemplo.com`;
 ver [dónde publicarlo](README.md#dónde-publicarlo)).
@@ -22,6 +23,16 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | POST | `/api/v1/import/jobs` | usuario de Navidrome | Importar en el servidor (la app puede cerrarse) |
 | GET | `/api/v1/import/jobs` · `/api/v1/import/jobs/{id}` | usuario de Navidrome | Tu última importación o una concreta: avance y resultado |
 | DELETE | `/api/v1/import/jobs/{id}` | usuario de Navidrome | Cancelarla |
+| GET | `/api/v1/social/people` | usuario de Navidrome | Quién usa Melvara en este servidor (sin ti ni los perfiles ocultos) |
+| POST | `/api/v1/social/visibility` | usuario de Navidrome | `{"hidden": true/false}`: si tu perfil está oculto |
+| POST | `/api/v1/social/listening/share` | usuario de Navidrome | `{"share": true/false}`: si compartes lo que escuchas (al quitarlo se borra) |
+| POST | `/api/v1/social/listening` | usuario de Navidrome | `{"track": {…}}` al empezar una canción, o `{"stopped": true}` |
+| GET | `/api/v1/social/listening` | usuario de Navidrome | Lo que escuchan tus seguidores mutuos que lo comparten |
+| POST | `/api/v1/jam` | usuario de Navidrome | Abrir una sesión de «escuchar en grupo» |
+| GET / DELETE | `/api/v1/jam/{code}` | quien está en la sesión / el anfitrión | Ver la sesión / cerrarla |
+| POST | `/api/v1/jam/{code}/join` · `leave` · `add` · `control` | usuario de Navidrome | Unirse, salir, añadir canciones, cambiar de canción o mover la barra |
+| GET | `/api/v1/jam/{code}/pending?after=` | el anfitrión | Lo que han añadido y pedido los demás |
+| POST | `/api/v1/jam/{code}/state` · `perms` · `kick` | el anfitrión | Contar qué suena, qué pueden hacer los demás, quitar a alguien |
 | GET | `/api/v1/service/wishlist` | token de servicio | Leer las listas de **todos** (otras aplicaciones) |
 | PATCH | `/api/v1/service/wishlist/{id}` | token de servicio | Cambiar el estado de un deseo (p. ej. «en la biblioteca») |
 | GET | `/api/v1/lastfm/search?q=` | usuario de Navidrome | Buscar canciones en Last.fm |
@@ -36,12 +47,16 @@ curl https://musica-api.ejemplo.com/api/v1/status
 ```
 
 ```json
-{"service": "melvara-api", "version": "2.4.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true}
+{"service": "melvara-api", "version": "2.10.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true,
+ "reports": true, "extraLists": true, "imports": true, "jam": true, "jamControl": true, "social": true}
 ```
 
 - `service`: siempre `melvara-api` (hasta la 2.2, `sonora-api`). Si no sale esto, no es un Melvara Server.
 - `lastfm`: hay búsqueda en Last.fm y listas de éxitos. `lastfmAuth`: se puede conectar el perfil de Last.fm.
 - `serviceApi`: la ruta de servicio está activa.
+- `reports`, `extraLists`, `imports`: denuncias, listas extra e importaciones en el servidor.
+- `jam` (2.8): escuchar en grupo. `jamControl` (2.9): los demás pueden cambiar de canción o mover la barra.
+- `social` (2.10): lista de personas y lo que escuchan tus seguidores mutuos.
 
 ## Acceso de usuario (cabeceras `X-Melvara-*`)
 
@@ -203,6 +218,40 @@ playlists y ordena tu biblioteca, aunque cierres la app.
   `total`; al terminar, `result` con lo encontrado (`matches`: clave → id de la canción) y lo que falta.
 - La búsqueda es la misma que la de la app (`find_track` en `app/importer.py` y `findTrack` en
   `Melvara/Catalog/Charts.swift`): si se cambia una, hay que cambiar la otra.
+
+Si Navidrome responde «database is locked» (por ejemplo, escaneando la biblioteca), el servidor espera y repite
+hasta unos 3 minutos: ese error quiere decir que no se ha guardado nada, así que repetir no duplica (2.9.1).
+
+## Social
+
+Desde la 2.10. La parte social de la app (perfiles, seguir, bloquear) se guarda en Navidrome, en una playlist
+«Melvara · Perfil» de cada persona. Melvara Server añade dos cosas:
+
+- **Personas**: apunta a quien usa Melvara con él (nombre de usuario y última vez; se guarda como mucho una vez
+  por hora en cualquier llamada). `GET /api/v1/social/people` las devuelve sin quien ha ocultado su perfil
+  (`POST /api/v1/social/visibility`).
+- **Lo que escuchas**: si lo compartes (`POST /api/v1/social/listening/share`), la app cuenta cada canción que
+  empieza y el servidor guarda la actual y las 5 últimas. `GET /api/v1/social/listening` solo devuelve a
+  **seguidores mutuos** (cada uno en el `following` del otro, aceptado si el perfil es privado, sin bloqueos ni
+  perfiles ocultos) que también compartan, y nada si quien pregunta no comparte. Los seguimientos se leen de los
+  perfiles en Navidrome **con el acceso de quien pregunta** (un minuto en memoria), así que no se pueden falsear.
+  Es solo de Melvara: Navidrome sigue recibiendo «lo que suena» como siempre.
+
+```json
+{"sharing": true, "friends": [{"user": "pepe", "nowPlaying": {"id": "s1", "title": "Tusa"}, "since": 1763400000,
+  "recent": [{"id": "s1", "title": "Tusa"}]}]}
+```
+
+## Escuchar en grupo
+
+Desde la 2.8. Quien abre la sesión (`POST /api/v1/jam` → `code`) enseña un QR `melvara://jam?code=…&server=…`.
+Solo pueden unirse personas con cuenta en el mismo Navidrome. Todo vive en memoria y caduca tras 6 horas sin uso.
+
+- Los demás añaden canciones (`add`) y el anfitrión las recoge (`pending`) y las mete en su cola.
+- Desde la 2.9, si el anfitrión lo permite (`perms`: `{"skip": true, "seek": true}`), pueden pedir
+  `control` con `{"action": "next" | "previous" | "seek", "position": 30}`; el anfitrión lo aplica.
+- El anfitrión cuenta qué suena, por dónde va (`position`, `playing`) y qué viene (`state`); el estado lleva
+  `now` (la hora del servidor) para calcular la posición sin depender del reloj de cada iPhone.
 
 ## Ruta de servicio: las listas de todos
 
