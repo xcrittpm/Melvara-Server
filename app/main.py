@@ -9,12 +9,13 @@ import os
 from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from . import __version__
-from .auth import Auth, RateLimiter
+from .auth import Auth, NavidromeUnavailable, RateLimiter
 from .lastfm import LastFM
 from .extras import ExtraLists
 from .importer import ImportJobs
@@ -119,7 +120,11 @@ def protected(handler):
             return _error(429, "Demasiadas peticiones")
         if not user or not token or not salt:
             return _error(401, "Falta el acceso de Navidrome")
-        username = state.auth.user_for(user, token, salt)
+        try:
+            # En otro hilo: la consulta a Navidrome es bloqueante y, mientras esperaba, paraba a todo el servidor.
+            username = await run_in_threadpool(state.auth.user_for, user, token, salt)
+        except NavidromeUnavailable:
+            return _error(503, "Navidrome no responde ahora mismo. Inténtalo en un momento.")
         if username is None:
             return _error(401, "Este acceso no es válido en Navidrome")
         request.state.access = (user, token, salt)
@@ -294,14 +299,14 @@ def _reports() -> Reports:
     return state.reports
 
 
-def _require_admin(request: Request) -> None:
-    if not state.auth.is_admin(*request.state.access):
+async def _require_admin(request: Request) -> None:
+    if not await run_in_threadpool(state.auth.is_admin, *request.state.access):
         raise PermissionError("Solo las cuentas administradoras de Navidrome ven las denuncias")
 
 
 async def reports(request: Request, user: str):
     if request.method == "GET":
-        _require_admin(request)
+        await _require_admin(request)
         return {"items": _reports().list(request.query_params.get("all") == "1")}
     try:
         body = json.loads(await request.body() or b"{}")
@@ -321,7 +326,7 @@ async def reports(request: Request, user: str):
 
 
 async def report_item(request: Request, user: str):
-    _require_admin(request)
+    await _require_admin(request)
     try:
         item_id = int(request.path_params["id"])
     except ValueError:
@@ -360,7 +365,7 @@ async def _check_lastfm(kind: str, value: str) -> None:
 async def extra_lists(request: Request, user: str):
     if request.method == "GET":
         return {"items": _extras().list()}
-    _require_admin(request)
+    await _require_admin(request)
     body = await _body(request)
     kind, value, title = ExtraLists.clean(str(body.get("kind", "")), str(body.get("value", "")), str(body.get("title", "")))
     await _check_lastfm(kind, value)
@@ -370,7 +375,7 @@ async def extra_lists(request: Request, user: str):
 
 
 async def extra_list_item(request: Request, user: str):
-    _require_admin(request)
+    await _require_admin(request)
     try:
         item_id = int(request.path_params["id"])
     except ValueError:

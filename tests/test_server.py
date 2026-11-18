@@ -664,3 +664,28 @@ def test_social_personas_y_lo_que_escuchan():
     profiles["pepe"]["blocked"] = ["ana"]
     social._profiles.clear()
     assert c.get("/api/v1/social/listening", headers=headers("ana")).json()["friends"] == []
+
+
+def test_navidrome_que_no_responde_no_deja_fuera():
+    """Si Navidrome no responde, 503 (no «acceso no válido») y no se recuerda: al volver, entra a la primera."""
+    from app.auth import NavidromeUnavailable
+
+    class FlakyAuth(Auth):
+        def __init__(self):
+            super().__init__("http://navidrome.invalid")
+            self.down = True
+
+        def _ask_navidrome(self, user, token, salt):
+            if self.down:
+                raise NavidromeUnavailable()
+            return True
+
+    auth = FlakyAuth()
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    main.configure(auth, RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db))
+    c = TestClient(main.app)
+    r = c.get("/api/v1/wishlist", headers=headers("ana"))
+    assert r.status_code == 503 and "no responde" in r.json()["error"]
+    auth.down = False
+    assert c.get("/api/v1/wishlist", headers=headers("ana")).status_code == 200

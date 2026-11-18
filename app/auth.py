@@ -18,8 +18,13 @@ import httpx
 log = logging.getLogger("melvara.auth")
 
 
+class NavidromeUnavailable(Exception):
+    """Navidrome no ha respondido (caído, lento o escaneando): no se sabe si el acceso es válido."""
+
+
 class Auth:
-    def __init__(self, navidrome_url: str, ttl: int = 600, negative_ttl: int = 60):
+    # Un acceso bueno se recuerda 30 min: si Navidrome tiene un mal momento, quien ya estaba dentro sigue.
+    def __init__(self, navidrome_url: str, ttl: int = 1800, negative_ttl: int = 60):
         self.navidrome_url = navidrome_url.rstrip("/")
         self.ttl = ttl
         self.negative_ttl = negative_ttl
@@ -33,7 +38,9 @@ class Auth:
         return hashlib.sha256(f"{user}|{token}|{salt}".encode()).hexdigest()
 
     def user_for(self, user: str, token: str, salt: str) -> str | None:
-        """Nombre de usuario (en minúsculas) si el acceso es válido en Navidrome; si no, None."""
+        """Nombre de usuario (en minúsculas) si el acceso es válido en Navidrome; si no, None.
+        Si Navidrome no responde, `NavidromeUnavailable` (y no se recuerda como «no válido»: antes, un minuto
+        sin respuesta dejaba a esa persona fuera de todo, p. ej. «Este acceso no es válido» al importar)."""
         if not user or not token or not salt or max(len(user), len(token), len(salt)) > 256:
             return None
         k = self.key(user, token, salt)
@@ -42,7 +49,7 @@ class Auth:
             hit = self._cache.get(k)
             if hit and hit[0] > now:
                 return hit[1]
-        result = user.lower() if self._ask_navidrome(user, token, salt) else None
+        result = user.lower() if self._ask_navidrome(user, token, salt) else None  # puede lanzar NavidromeUnavailable
         with self._lock:
             ttl = self.ttl if result else self.negative_ttl
             self._cache[k] = (now + ttl, result)
@@ -79,16 +86,24 @@ class Auth:
         return body.get("status") == "ok" and body.get("user", {}).get("adminRole") is True
 
     def _ask_navidrome(self, user: str, token: str, salt: str) -> bool:
-        try:
-            resp = self._client.get(
-                f"{self.navidrome_url}/rest/ping.view",
-                params={"u": user, "t": token, "s": salt, "v": "1.16.1", "c": "MelvaraServer", "f": "json"},
-            )
-            body = resp.json().get("subsonic-response", {})
-        except (httpx.HTTPError, ValueError):
-            log.warning("No se pudo contactar con Navidrome para validar un acceso")
-            return False
-        return body.get("status") == "ok"
+        params = {"u": user, "t": token, "s": salt, "v": "1.16.1", "c": "MelvaraServer", "f": "json"}
+        for attempt in (1, 2):
+            try:
+                resp = self._client.get(f"{self.navidrome_url}/rest/ping.view", params=params)
+                body = resp.json().get("subsonic-response", {})
+            except (httpx.HTTPError, ValueError):
+                if attempt == 1:
+                    time.sleep(1)
+                    continue
+                log.warning("No se pudo contactar con Navidrome para validar un acceso")
+                raise NavidromeUnavailable() from None
+            if body.get("status") == "ok":
+                return True
+            # Código 40: usuario o contraseña mal. Otro error de Navidrome: tampoco se sabe, no se da por malo.
+            if (body.get("error") or {}).get("code") in (40, 41, 44):
+                return False
+            raise NavidromeUnavailable()
+        return False
 
 
 class RateLimiter:
