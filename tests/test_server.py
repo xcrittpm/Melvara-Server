@@ -949,3 +949,23 @@ def test_invitaciones():
     r = c.post("/api/v1/invites", json={**nueva, "username": "eva"}, headers=headers("admin")).json()
     assert c.delete(f"/api/v1/invites/{r['invite']['id']}", headers=headers("admin")).json()["deleted"] is True
     assert c.post("/api/v1/invites/check", json={"code": r["code"]}).status_code == 404
+
+
+def test_no_me_gusta_de_cada_persona():
+    from app.dislikes import Dislikes
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db),
+                   dislikes=Dislikes(db))
+    c = TestClient(main.app)
+    assert c.get("/api/v1/status").json()["dislikes"] is True
+    assert c.post("/api/v1/dislikes", json={"kind": "otra", "id": "1"}, headers=headers("ana")).status_code == 400
+    c.post("/api/v1/dislikes", json={"kind": "track", "id": "s1", "title": "Tusa", "artist": "KAROL G"}, headers=headers("ana"))
+    c.post("/api/v1/dislikes", json={"kind": "artist", "id": "ar/2", "title": "Bad Bunny"}, headers=headers("ana"))
+    c.post("/api/v1/dislikes", json={"kind": "track", "id": "s1"}, headers=headers("ana"))  # repetido: no se duplica
+    items = c.get("/api/v1/dislikes", headers=headers("ana")).json()["items"]
+    assert sorted((i["kind"], i["id"]) for i in items) == [("artist", "ar/2"), ("track", "s1")]
+    assert c.get("/api/v1/dislikes", headers=headers("luis")).json()["items"] == []  # cada uno lo suyo
+    assert c.delete("/api/v1/dislikes/artist/ar/2", headers=headers("ana")).json()["deleted"] is True
+    assert c.delete("/api/v1/dislikes/artist/ar/2", headers=headers("ana")).status_code == 404
+    assert [i["id"] for i in c.get("/api/v1/dislikes", headers=headers("ana")).json()["items"]] == ["s1"]

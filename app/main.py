@@ -24,6 +24,7 @@ from .sources import AppleMusic, Deezer, ListenBrainz, Settings, Sources
 from .extras import ExtraLists
 from .importer import ImportJobs
 from .invites import InviteError, Invites, page as invite_page
+from .dislikes import Dislikes
 from .jam import Jams
 from .reports import Reports
 from .social import Social
@@ -58,6 +59,7 @@ class State:
     refresher = None
     lastfm_check: str | None = None
     invites: Invites | None = None
+    dislikes: Dislikes | None = None
     invite_limiter = RateLimiter(10)
 
 
@@ -67,8 +69,10 @@ state = State()
 def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "",
               reports: Reports | None = None, extras: ExtraLists | None = None,
               imports: ImportJobs | None = None, social: Social | None = None,
-              sources: Sources | None = None, invites: Invites | None = None) -> None:
+              sources: Sources | None = None, invites: Invites | None = None,
+              dislikes: Dislikes | None = None) -> None:
     state.invites = invites
+    state.dislikes = dislikes
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
     state.sources = sources or Sources(lastfm)
     state.social = social
@@ -109,6 +113,7 @@ async def lifespan(app):
             Social(database, os.environ["NAVIDROME_URL"]),
             Sources(lastfm, Settings(database), database, Deezer(), AppleMusic(), ListenBrainz()),
             Invites(database, os.environ["NAVIDROME_URL"]),
+            Dislikes(database),
         )
         state.refresher = asyncio.get_running_loop().create_task(state.sources.keep_fresh())
         if state.service_token and len(state.service_token) < 32:
@@ -177,6 +182,27 @@ async def played(request: Request, user: str):
     body = await _body(request)
     _social().last_played(user, body.get("track"))
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ «No me gusta» (2.13)
+
+
+def _dislikes() -> Dislikes:
+    if state.dislikes is None:
+        raise LookupError("Este servidor no guarda «No me gusta»")
+    return state.dislikes
+
+
+async def dislikes(request: Request, user: str):
+    """GET = los tuyos; POST {kind: track|album|artist, id, title?, artist?} = añadir."""
+    if request.method == "GET":
+        return {"items": _dislikes().list(user)}
+    return {"item": _dislikes().add(user, await _body(request))}
+
+
+async def dislike_item(request: Request, user: str):
+    removed = _dislikes().remove(user, request.path_params["kind"], request.path_params["id"])
+    return {"deleted": True} if removed else None
 
 
 # ------------------------------------------------------------------ invitaciones (2.12)
@@ -284,7 +310,8 @@ async def status(request: Request):
     # «lastfm» = hay búsqueda y listas (sea de la fuente que sea): así lo entienden las apps ya instaladas.
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.sources.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "sources": state.sources.status(), "admin": True,
-                         "lastPlayed": state.social is not None, "invites": state.invites is not None, "minApp": state.sources.settings.get("min_app"), "serviceApi": bool(state.service_token),
+                         "lastPlayed": state.social is not None, "invites": state.invites is not None,
+                         "dislikes": state.dislikes is not None, "minApp": state.sources.settings.get("min_app"), "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
                          "imports": state.imports is not None, "jam": True, "jamControl": True, "social": state.social is not None},
                         headers=SECURITY_HEADERS)
@@ -666,6 +693,8 @@ app = Starlette(
         Route("/api/v1/social/people", protected(social_people), methods=["GET"]),
         Route("/api/v1/admin/people", protected(admin_people), methods=["GET"]),
         Route("/api/v1/played", protected(played), methods=["POST"]),
+        Route("/api/v1/dislikes", protected(dislikes), methods=["GET", "POST"]),
+        Route("/api/v1/dislikes/{kind}/{id:path}", protected(dislike_item), methods=["DELETE"]),
         Route("/api/v1/invites", protected(invites), methods=["GET", "POST"]),
         Route("/api/v1/invites/{action:str}", invite_public, methods=["POST"]),
         Route("/api/v1/invites/{id:int}", protected(invite_item), methods=["DELETE"]),

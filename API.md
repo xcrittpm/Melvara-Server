@@ -27,6 +27,8 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | GET | `/api/v1/invites` · DELETE `/api/v1/invites/{id}` | administrador de Navidrome | Invitaciones pendientes / cancelar una |
 | POST | `/api/v1/invites/check` · `/api/v1/invites/redeem` | público (con el código; 10 por minuto) | Ver a quién es / poner la contraseña elegida en Navidrome y gastarla |
 | GET | `/invitacion/{code}` | público | Página del enlace: «Abrir en Melvara» y App Store (no gasta la invitación) |
+| GET / POST | `/api/v1/dislikes` | usuario de Navidrome | «No me gusta» (`kind`: `track`, `album` o `artist`; `id`; `title`; `artist`): para ∞, radio y Descubrimiento (2.13) |
+| DELETE | `/api/v1/dislikes/{kind}/{id}` | usuario de Navidrome | Quitar uno |
 | POST | `/api/v1/played` | usuario de Navidrome | `{"track": {title, artist, album}}`: última canción, para Administración (2.11.2) |
 | GET | `/api/v1/admin/people` | administrador de Navidrome | Todas las personas (también ocultas): último uso y versión de la app (2.11) |
 | GET | `/api/v1/social/people` | usuario de Navidrome | Quién usa Melvara en este servidor (sin ti ni los perfiles ocultos) |
