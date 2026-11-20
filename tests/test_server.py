@@ -689,3 +689,157 @@ def test_navidrome_que_no_responde_no_deja_fuera():
     assert r.status_code == 503 and "no responde" in r.json()["error"]
     auth.down = False
     assert c.get("/api/v1/wishlist", headers=headers("ana")).status_code == 200
+
+
+# ------------------------------------------------------------------ fuentes y web de administración (2.11)
+
+from app import admin as admin_web  # noqa: E402
+from app.sources import SourceError, Sources  # noqa: E402
+
+
+class FakeSource:
+    def __init__(self, name, fail=False):
+        self.name, self.fail, self.calls = name, fail, 0
+
+    async def chart(self, code, limit=100):
+        self.calls += 1
+        if self.fail:
+            raise SourceError(f"{self.name} caído")
+        if self.name == "apple" and not code:
+            raise SourceError("sin mundial")
+        return [{"title": f"{self.name}-{code or 'world'}", "artist": "X", "album": None}]
+
+    async def search(self, query, limit=30):
+        if self.fail:
+            raise SourceError("caído")
+        return [{"title": "Tusa", "artist": "KAROL G", "album": "KG0516", "year": None, "listeners": 5, "url": None}]
+
+    async def artist_top(self, artist, limit=50):
+        return [{"title": f"top-{artist}", "artist": artist, "album": None}]
+
+
+def make_sources_client(lastfm_key="", apple_fail=False, deezer_fail=False):
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    from app.sources import Settings
+    lastfm = FakeLastFM(lastfm_key)
+    apple, deezer = FakeSource("apple", apple_fail), FakeSource("deezer", deezer_fail)
+    sources = Sources(lastfm, Settings(db), db, deezer=deezer, apple=apple, listenbrainz=FakeSource("listenbrainz"))
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), lastfm, "", Reports(db), ExtraLists(db), sources=sources)
+    return TestClient(main.app), sources, apple, deezer
+
+
+def test_sin_lastfm_se_busca_en_deezer_y_las_listas_salen_de_apple():
+    c, sources, apple, deezer = make_sources_client()
+    st = c.get("/api/v1/status").json()
+    assert st["lastfm"] is True and st["lastfmAuth"] is False  # las apps instaladas siguen viendo búsqueda y listas
+    assert st["sources"]["search"] == "deezer" and st["sources"]["charts"] == "apple"
+    r = c.get("/api/v1/lastfm/search", params={"q": "tusa"}, headers=headers()).json()
+    assert r["source"] == "deezer" and r["results"][0]["title"] == "Tusa"
+    # La app manda el país en inglés («spain»); también vale el código.
+    r = c.get("/api/v1/lastfm/charts", params={"country": "spain"}, headers=headers()).json()
+    assert r["source"] == "apple" and r["tracks"][0]["title"] == "apple-es"
+    assert c.get("/api/v1/lastfm/charts", params={"country": "es"}, headers=headers()).json()["source"] == "apple"
+    assert apple.calls == 1  # la segunda vez, de lo guardado
+    # Apple no tiene mundial: sale de la siguiente (Deezer).
+    assert c.get("/api/v1/lastfm/charts", headers=headers()).json()["source"] == "deezer"
+    assert c.get("/api/v1/lastfm/charts", params={"country": "narnia"}, headers=headers()).status_code == 400
+
+
+def test_si_la_fuente_falla_se_usa_la_siguiente_o_la_ultima_buena():
+    c, sources, apple, deezer = make_sources_client(apple_fail=True)
+    assert c.get("/api/v1/lastfm/charts", params={"country": "spain"}, headers=headers()).json()["source"] == "deezer"
+    # Todo caído: se sigue dando la última buena.
+    deezer.fail = True
+    sources.forget()
+    r = c.get("/api/v1/lastfm/charts", params={"country": "spain"}, headers=headers())
+    assert r.status_code == 200 and r.json()["tracks"][0]["title"] == "deezer-es"
+
+
+def test_listas_extra_sin_lastfm():
+    c, *_ = make_sources_client()
+    # Etiquetas: solo Last.fm. Artista: Deezer.
+    assert c.post("/api/v1/charts/extra", json={"kind": "tag", "value": "rock"}, headers=headers("admin")).status_code == 400
+    assert c.post("/api/v1/charts/extra", json={"kind": "artist", "value": "Rosalía"}, headers=headers("admin")).status_code == 200
+    r = c.get("/api/v1/lastfm/charts", params={"kind": "artist", "value": "Rosalía"}, headers=headers()).json()
+    assert r["source"] == "deezer" and r["tracks"][0]["title"] == "top-Rosalía"
+
+
+def _login(c, user="admin", password="bueno"):
+    # FakeAuth da por bueno el token «bueno»: se simula que la contraseña es correcta.
+    original = admin_web.hashlib.md5
+    admin_web.hashlib.md5 = lambda data: type("H", (), {"hexdigest": lambda self: password})()
+    try:
+        return c.post("/admin/login", data={"user": user, "password": "x"}, follow_redirects=False)
+    finally:
+        admin_web.hashlib.md5 = original
+
+
+def test_web_de_administracion():
+    c, sources, apple, deezer = make_sources_client()
+    r = c.get("/admin")
+    assert r.status_code == 200 and "Entrar" in r.text and "frame-ancestors" in r.headers["content-security-policy"]
+    assert _login(c, "ana").headers["location"].endswith("m=notadmin")
+    assert _login(c, "admin", "malo").headers["location"].endswith("m=bad")
+    r = _login(c)
+    assert r.status_code == 303 and admin_web.COOKIE in r.cookies
+    page = c.get("/admin").text
+    assert "Listas de éxitos" in page and "Last.fm Pro" in page
+    csrf = page.split('name="csrf" value="')[1].split('"')[0]
+    # Sin el token del formulario no se guarda nada.
+    assert c.post("/admin/settings", data={"search": "lastfm"}, follow_redirects=False).headers["location"].endswith("m=csrf")
+    # Desde otra web, tampoco.
+    other = c.post("/admin/settings", data={"csrf": csrf, "charts": "deezer"}, headers={"Origin": "https://malo.example"},
+                   follow_redirects=False)
+    assert other.headers["location"].endswith("m=csrf")
+    r = c.post("/admin/settings", data={"csrf": csrf, "search": "deezer", "charts": "deezer", "list_es": "apple",
+                                        "list_world": "apple", "lastfm_key": "nueva", "lastfm_on": "1"},
+               follow_redirects=False)
+    assert r.headers["location"].endswith("m=saved")
+    st = c.get("/api/v1/status").json()["sources"]
+    assert st["charts"] == "deezer" and st["lists"]["es"] == "apple"
+    assert st["lists"]["world"] == "deezer"  # Apple no tiene mundial: no se guarda
+    assert sources.lastfm.api_key == "nueva" and c.get("/api/v1/status").json()["lastfm"] is True
+    assert c.get("/api/v1/lastfm/charts", params={"country": "mexico"}, headers=headers()).json()["source"] == "deezer"
+    # Desactivar Last.fm.
+    c.post("/admin/settings", data={"csrf": csrf, "search": "lastfm"}, follow_redirects=False)
+    assert sources.lastfm.api_key == "" and c.get("/api/v1/status").json()["sources"]["search"] == "deezer"
+    # Salir.
+    c.post("/admin/logout", follow_redirects=False)
+    assert "Entrar" in c.get("/admin").text
+
+
+def test_busquedas_iguales_salen_de_memoria():
+    c, sources, apple, deezer = make_sources_client()
+    calls = []
+    original = deezer.search
+
+    async def counted(query, limit=30):
+        calls.append(query)
+        return await original(query, limit)
+
+    deezer.search = counted
+    for q in ("Tusa", "tusa ", "TUSA"):
+        assert c.get("/api/v1/lastfm/search", params={"q": q}, headers=headers()).json()["source"] == "deezer"
+    assert calls == ["Tusa"]
+
+
+def test_version_de_la_app_de_cada_persona():
+    from app.social import Social
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db),
+                   social=Social(db, "http://navidrome.invalid"))
+    c = TestClient(main.app)
+    ua = {"User-Agent": "Melvara/51 CFNetwork/3860.100.1 Darwin/25.1.0"}
+    c.get("/api/v1/wishlist", headers={**headers("ana"), **ua})
+    c.get("/api/v1/wishlist", headers={**headers("luis"), "X-Melvara-App": "1.3 (52)"})
+    c.get("/api/v1/wishlist", headers=headers("eva"))  # sin versión
+    assert c.get("/api/v1/admin/people", headers=headers("ana")).status_code == 403
+    people = {p["user"]: p["app"] for p in c.get("/api/v1/admin/people", headers=headers("admin")).json()["people"]}
+    assert people["ana"] == "(51)" and people["luis"] == "1.3 (52)" and people["eva"] is None
+    # Al actualizar la app se apunta al momento (sin esperar a la hora).
+    c.get("/api/v1/wishlist", headers={**headers("ana"), "X-Melvara-App": "1.3 (53)"})
+    c.get("/api/v1/wishlist", headers=headers("ana"))  # una petición sin versión no la borra
+    people = {p["user"]: p["app"] for p in c.get("/api/v1/admin/people", headers=headers("admin")).json()["people"]}
+    assert people["ana"] == "1.3 (53)"

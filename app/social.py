@@ -94,23 +94,39 @@ class Social:
                     recent TEXT NOT NULL DEFAULT '[]'
                 )"""
             )
+            columns = {r[1] for r in self._db.execute("PRAGMA table_info(social_users)")}
+            if "app" not in columns:  # 2.11: versión de la app con la que entró por última vez
+                self._db.execute("ALTER TABLE social_users ADD COLUMN app TEXT")
             self._db.commit()
+        self._apps: dict[str, str] = {}
 
     # ------------------------------------------------------------ personas
 
-    def seen(self, username: str) -> None:
-        """Alguien ha usado Melvara con este servidor (se llama en cada petición; se guarda como mucho cada hora)."""
+    def seen(self, username: str, app: str | None = None) -> None:
+        """Alguien ha usado Melvara con este servidor (se llama en cada petición; se guarda como mucho cada hora,
+        o al momento si ha cambiado de versión de la app)."""
         key = username.lower()
         now = time.time()
-        if now - self._seen.get(key, 0) < SEEN_EVERY:
+        changed = app is not None and self._apps.get(key) != app
+        if not changed and now - self._seen.get(key, 0) < SEEN_EVERY:
             return
         self._seen[key] = now
+        if app is not None:
+            self._apps[key] = app
         with self._lock:
             self._db.execute(
-                "INSERT INTO social_users (username, last_seen) VALUES (?, ?) "
-                "ON CONFLICT(username) DO UPDATE SET last_seen = excluded.last_seen",
-                (username, int(now)))
+                "INSERT INTO social_users (username, last_seen, app) VALUES (?, ?, ?) "
+                "ON CONFLICT(username) DO UPDATE SET last_seen = excluded.last_seen, "
+                "app = COALESCE(excluded.app, social_users.app)",
+                (username, int(now), app))
             self._db.commit()
+
+    def everyone(self) -> list[dict]:
+        """Para quien administra: todas las personas (también las ocultas), cuándo entraron y con qué versión."""
+        with self._lock:
+            rows = self._db.execute("SELECT username, last_seen, app, hidden FROM social_users "
+                                    "ORDER BY last_seen DESC").fetchall()
+        return [{"user": r[0], "lastSeen": r[1], "app": r[2], "hidden": bool(r[3])} for r in rows]
 
     def set_hidden(self, username: str, hidden: bool) -> None:
         with self._lock:

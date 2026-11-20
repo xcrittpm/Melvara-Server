@@ -6,6 +6,8 @@ import hmac
 import json
 import logging
 import os
+import re
+import asyncio
 from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
@@ -16,7 +18,9 @@ from starlette.routing import Route
 
 from . import __version__
 from .auth import Auth, NavidromeUnavailable, RateLimiter
+from . import admin, countries
 from .lastfm import LastFM
+from .sources import AppleMusic, Deezer, ListenBrainz, Settings, Sources
 from .extras import ExtraLists
 from .importer import ImportJobs
 from .jam import Jams
@@ -49,6 +53,9 @@ class State:
     imports: ImportJobs | None = None
     jams: Jams = Jams()
     social: Social | None = None
+    sources: Sources
+    refresher = None
+    lastfm_check: str | None = None
 
 
 state = State()
@@ -56,8 +63,10 @@ state = State()
 
 def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "",
               reports: Reports | None = None, extras: ExtraLists | None = None,
-              imports: ImportJobs | None = None, social: Social | None = None) -> None:
+              imports: ImportJobs | None = None, social: Social | None = None,
+              sources: Sources | None = None) -> None:
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
+    state.sources = sources or Sources(lastfm)
     state.social = social
     state.reports = reports
     state.extras = extras
@@ -83,17 +92,20 @@ async def lifespan(app):
         data_dir = os.environ.get("DATA_DIR", "/data")
         os.makedirs(data_dir, exist_ok=True)
         database = _database(data_dir)
+        lastfm = LastFM(os.environ.get("LASTFM_API_KEY", ""), os.environ.get("LASTFM_SHARED_SECRET", ""))
         configure(
             Auth(os.environ["NAVIDROME_URL"]),
             RateLimiter(int(os.environ.get("RATE_LIMIT_PER_MINUTE", "120"))),
             Wishlist(database),
-            LastFM(os.environ.get("LASTFM_API_KEY", ""), os.environ.get("LASTFM_SHARED_SECRET", "")),
+            lastfm,
             os.environ.get("SERVICE_TOKEN", ""),
             Reports(database),
             ExtraLists(database),
             ImportJobs(database, os.environ["NAVIDROME_URL"]),
             Social(database, os.environ["NAVIDROME_URL"]),
+            Sources(lastfm, Settings(database), database, Deezer(), AppleMusic(), ListenBrainz()),
         )
+        state.refresher = asyncio.get_running_loop().create_task(state.sources.keep_fresh())
         if state.service_token and len(state.service_token) < 32:
             log.warning("SERVICE_TOKEN tiene menos de 32 caracteres: la ruta de servicio queda desactivada")
             state.service_token = ""
@@ -129,7 +141,7 @@ def protected(handler):
             return _error(401, "Este acceso no es válido en Navidrome")
         request.state.access = (user, token, salt)
         if state.social is not None:
-            state.social.seen(username)
+            state.social.seen(username, app_version(request))
         try:
             result = await handler(request, username)
         except PermissionError as e:
@@ -145,6 +157,22 @@ def protected(handler):
     return endpoint
 
 
+def app_version(request: Request) -> str | None:
+    """Versión de la app que hace la petición. Desde la 52 la manda en X-Melvara-App («1.3 (52)»); las anteriores
+    solo la dejan ver en el User-Agent que pone iOS («Melvara/51 CFNetwork/… Darwin/…» → «(51)»)."""
+    sent = request.headers.get("x-melvara-app", "").strip()
+    if sent:
+        return sent[:40]
+    match = re.match(r"^(?:Melvara|Sonora)/(\d+(?:\.\d+)*)\s+CFNetwork/", request.headers.get("user-agent", ""))
+    return f"({match.group(1)})" if match else None
+
+
+async def admin_people(request: Request, user: str):
+    """Para Administración en la app: quién usa Melvara en este servidor, cuándo entró y con qué versión."""
+    await _require_admin(request)
+    return {"people": _social().everyone()}
+
+
 # ------------------------------------------------------------------ rutas
 
 
@@ -154,25 +182,25 @@ async def health(request: Request):
 
 async def status(request: Request):
     # Público (sin datos): la app lo usa para saber que aquí hay un Melvara Server.
-    return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.lastfm.enabled,
-                         "lastfmAuth": state.lastfm.can_sign, "serviceApi": bool(state.service_token),
+    # «lastfm» = hay búsqueda y listas (sea de la fuente que sea): así lo entienden las apps ya instaladas.
+    return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.sources.enabled,
+                         "lastfmAuth": state.lastfm.can_sign, "sources": state.sources.status(), "admin": True, "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
                          "imports": state.imports is not None, "jam": True, "jamControl": True, "social": state.social is not None},
                         headers=SECURITY_HEADERS)
 
 
 async def search(request: Request, user: str):
-    if not state.lastfm.enabled:
-        raise ValueError("Este servidor no tiene configurada la búsqueda en Last.fm")
     q = request.query_params.get("q", "").strip()
     if not q or len(q) > 200:
         raise ValueError("Búsqueda vacía o demasiado larga")
-    return {"results": await state.lastfm.search(q)}
+    results, source = await state.sources.search(q)
+    return {"results": results, "source": source}
 
 
 async def charts(request: Request, user: str):
-    if not state.lastfm.enabled:
-        raise ValueError("Este servidor no tiene configurado Last.fm")
+    """Una lista de éxitos: mundial, de un país («spain» o «es») o una lista extra. Sale de la fuente que se
+    eligió en la web de administración y se guarda unas horas (ver sources.py)."""
     country = request.query_params.get("country", "").strip().lower() or None
     if country and len(country) > 60:
         raise ValueError("País no válido")
@@ -180,7 +208,15 @@ async def charts(request: Request, user: str):
     value = request.query_params.get("value", "").strip() or None
     if kind:
         kind, value, _ = ExtraLists.clean(kind, value or "", "")
-    return {"tracks": await state.lastfm.charts(country, kind=kind, value=value)}
+        return await state.sources.chart(None, kind, value)
+    try:
+        code = countries.parse(country)
+    except ValueError:
+        # Un país que no está en la tabla: solo Last.fm lo entiende por su nombre.
+        if not state.lastfm.enabled:
+            raise
+        return {"tracks": await state.lastfm.charts(country), "source": "lastfm", "updatedAt": None}
+    return await state.sources.chart(code)
 
 
 async def lastfm_call(request: Request, user: str):
@@ -355,11 +391,8 @@ async def _body(request: Request) -> dict:
 
 
 async def _check_lastfm(kind: str, value: str) -> None:
-    """Antes de guardar una lista: que Last.fm la tenga y no esté vacía."""
-    if not state.lastfm.enabled:
-        raise ValueError("Este servidor no tiene configurado Last.fm")
-    if not await state.lastfm.charts(None, limit=5, kind=kind, value=value):
-        raise ValueError("Last.fm no tiene canciones para esa lista")
+    """Antes de guardar una lista: que exista (en Last.fm o, la de un artista, en Deezer) y no esté vacía."""
+    await state.sources.check(kind, value)
 
 
 async def extra_lists(request: Request, user: str):
@@ -516,6 +549,11 @@ async def social_share(request: Request, user: str):
 app = Starlette(
     routes=[
         Route("/health", health),
+        Route("/admin", admin.admin, methods=["GET"]),
+        Route("/admin/login", admin.login, methods=["POST"]),
+        Route("/admin/logout", admin.logout, methods=["POST"]),
+        Route("/admin/settings", admin.save, methods=["POST"]),
+        Route("/admin/refresh", admin.refresh, methods=["POST"]),
         Route("/api/v1/status", status),
         Route("/api/v1/lastfm/search", protected(search)),
         Route("/api/v1/lastfm/charts", protected(charts)),
@@ -526,6 +564,7 @@ app = Starlette(
         Route("/api/v1/charts/extra", protected(extra_lists), methods=["GET", "POST"]),
         Route("/api/v1/import/jobs", protected(import_jobs), methods=["GET", "POST"]),
         Route("/api/v1/social/people", protected(social_people), methods=["GET"]),
+        Route("/api/v1/admin/people", protected(admin_people), methods=["GET"]),
         Route("/api/v1/social/visibility", protected(social_visibility), methods=["POST"]),
         Route("/api/v1/social/listening", protected(social_listening), methods=["GET", "POST"]),
         Route("/api/v1/social/listening/share", protected(social_share), methods=["POST"]),

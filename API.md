@@ -17,12 +17,13 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | POST | `/api/v1/reports` | usuario de Navidrome | Denunciar a una persona o una playlist compartida |
 | GET | `/api/v1/reports` | administrador de Navidrome | Ver las denuncias sin revisar (`?all=1`: también las revisadas) |
 | PATCH | `/api/v1/reports/{id}` | administrador de Navidrome | Marcar una denuncia como revisada |
-| GET | `/api/v1/charts/extra` | usuario de Navidrome | Listas extra de Last.fm que ha añadido el administrador |
+| GET | `/api/v1/charts/extra` | usuario de Navidrome | Listas extra que ha añadido el administrador |
 | POST | `/api/v1/charts/extra` | administrador de Navidrome | Añadir una lista extra (`kind`: `tag`, `user` o `artist`; `value`; `title`) |
 | PATCH / DELETE | `/api/v1/charts/extra/{id}` | administrador de Navidrome | Cambiarla o quitarla |
 | POST | `/api/v1/import/jobs` | usuario de Navidrome | Importar en el servidor (la app puede cerrarse) |
 | GET | `/api/v1/import/jobs` · `/api/v1/import/jobs/{id}` | usuario de Navidrome | Tu última importación o una concreta: avance y resultado |
 | DELETE | `/api/v1/import/jobs/{id}` | usuario de Navidrome | Cancelarla |
+| GET | `/api/v1/admin/people` | administrador de Navidrome | Todas las personas (también ocultas): último uso y versión de la app (2.11) |
 | GET | `/api/v1/social/people` | usuario de Navidrome | Quién usa Melvara en este servidor (sin ti ni los perfiles ocultos) |
 | POST | `/api/v1/social/visibility` | usuario de Navidrome | `{"hidden": true/false}`: si tu perfil está oculto |
 | POST | `/api/v1/social/listening/share` | usuario de Navidrome | `{"share": true/false}`: si compartes lo que escuchas (al quitarlo se borra) |
@@ -35,10 +36,11 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | POST | `/api/v1/jam/{code}/state` · `perms` · `kick` | el anfitrión | Contar qué suena, qué pueden hacer los demás, quitar a alguien |
 | GET | `/api/v1/service/wishlist` | token de servicio | Leer las listas de **todos** (otras aplicaciones) |
 | PATCH | `/api/v1/service/wishlist/{id}` | token de servicio | Cambiar el estado de un deseo (p. ej. «en la biblioteca») |
-| GET | `/api/v1/lastfm/search?q=` | usuario de Navidrome | Buscar canciones en Last.fm |
-| GET | `/api/v1/lastfm/charts?country=` | usuario de Navidrome | Listas de éxitos de Last.fm |
+| GET | `/api/v1/lastfm/search?q=` | usuario de Navidrome | Buscar canciones fuera del servidor (Deezer o Last.fm; el nombre de la ruta es histórico) |
+| GET | `/api/v1/lastfm/charts?country=` | usuario de Navidrome | Listas de éxitos (Apple Music, Deezer, ListenBrainz o Last.fm) |
 | POST | `/api/v1/lastfm/call` | usuario de Navidrome | Llamada de Last.fm firmada por el servidor (usa la app) |
 | GET | `/health` | público | Responde `ok` (para Docker) |
+| GET / POST | `/admin` | administrador de Navidrome | [Web de administración](README.md#web-de-administración) (fuentes y Last.fm) |
 
 ## Estado
 
@@ -47,12 +49,16 @@ curl https://musica-api.ejemplo.com/api/v1/status
 ```
 
 ```json
-{"service": "melvara-api", "version": "2.10.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true,
- "reports": true, "extraLists": true, "imports": true, "jam": true, "jamControl": true, "social": true}
+{"service": "melvara-api", "version": "2.11.0", "lastfm": true, "lastfmAuth": true, "serviceApi": true,
+ "sources": {"search": "deezer", "charts": "apple", "lists": {"world": "deezer", "es": "apple", "…": "…"}},
+ "admin": true, "reports": true, "extraLists": true, "imports": true, "jam": true, "jamControl": true, "social": true}
 ```
 
 - `service`: siempre `melvara-api` (hasta la 2.2, `sonora-api`). Si no sale esto, no es un Melvara Server.
-- `lastfm`: hay búsqueda en Last.fm y listas de éxitos. `lastfmAuth`: se puede conectar el perfil de Last.fm.
+- `lastfm`: hay búsqueda y listas de éxitos (desde la 2.11, de la fuente que sea: el nombre se mantiene por las
+  apps ya instaladas). `lastfmAuth`: se puede conectar el perfil de Last.fm.
+- `sources` (2.11): fuente de la búsqueda, fuente predeterminada de las listas y la elegida para cada lista
+  (`apple`, `deezer`, `lastfm` o `listenbrainz`). `admin` (2.11): hay web de administración en `/admin`.
 - `serviceApi`: la ruta de servicio está activa.
 - `reports`, `extraLists`, `imports`: denuncias, listas extra e importaciones en el servidor.
 - `jam` (2.8): escuchar en grupo. `jamControl` (2.9): los demás pueden cambiar de canción o mover la barra.
@@ -178,11 +184,28 @@ curl "${H[@]}" -X PATCH https://musica-api.ejemplo.com/api/v1/reports/3
 
 `/api/v1/status` dice `"reports": true` cuando el servidor las recoge.
 
-## Listas extra de Last.fm
+## Buscar y listas de éxitos
+
+```bash
+curl "${H[@]}" "https://musica-api.ejemplo.com/api/v1/lastfm/search?q=tusa"
+curl "${H[@]}" "https://musica-api.ejemplo.com/api/v1/lastfm/charts?country=spain"   # o country=es; sin country: mundial
+```
+
+```json
+{"results": [{"title": "Tusa", "artist": "KAROL G", "album": "Tusa", "year": null, "listeners": 975674, "url": "…"}], "source": "deezer"}
+{"tracks": [{"title": "…", "artist": "…", "album": null}], "source": "apple", "updatedAt": 1795164386}
+```
+
+- `source` (2.11): de dónde ha salido. `updatedAt`: cuándo la descargó el servidor (las listas se guardan y
+  se renuevan cada 6 horas; si la fuente falla se usa la siguiente y, si fallan todas, la última buena).
+- `country`: nombre en inglés («spain», «united states») o código («es», «us»). Un país desconocido: 400 (o, con
+  Last.fm activado, se le pide a Last.fm por su nombre).
+
+## Listas extra
 
 Además de los Top por país, quien administra Navidrome puede añadir listas para todas las personas del
 servidor (Melvara → Ajustes → Administración → Listas extra). Solo se guarda qué lista es; las canciones se
-piden a Last.fm al abrirla, por la ruta de siempre:
+descargan al abrirla (y se guardan unas horas), por la ruta de siempre:
 
 ```bash
 curl "${H[@]}" "https://musica-api.ejemplo.com/api/v1/lastfm/charts?kind=tag&value=reggaeton"
@@ -192,9 +215,10 @@ curl "${H[@]}" "https://musica-api.ejemplo.com/api/v1/lastfm/charts?kind=tag&val
 |---|---|---|
 | `tag` | Lo más escuchado con esa etiqueta («reggaeton», «80s», «indie»…) | `tag.gettoptracks` |
 | `user` | Lo más escuchado por ese usuario de Last.fm en los últimos 3 meses | `user.gettoptracks` |
-| `artist` | Lo más escuchado de ese artista | `artist.gettoptracks` |
+| `artist` | Lo más escuchado de ese artista | `artist.gettoptracks` (sin Last.fm: lo más escuchado en Deezer) |
 
-Al añadir o cambiar una, el servidor comprueba que Last.fm la tiene y no está vacía. Como mucho 50.
+Las de etiquetas y usuarios solo existen en Last.fm: sin Last.fm activado no se pueden añadir. Al añadir o
+cambiar una, el servidor comprueba que existe y no está vacía. Como mucho 50.
 `/api/v1/status` dice `"extraLists": true` cuando el servidor las admite (desde la 2.6).
 
 ## Importar en el servidor

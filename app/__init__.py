@@ -1,3 +1,3 @@
-"""Melvara Server: servicio de la app Melvara junto a tu Navidrome (búsqueda en Last.fm y lista de deseos)."""
+"""Melvara Server: servicio de la app Melvara junto a tu Navidrome (búsqueda, listas de éxitos, lista de deseos, social)."""
 
-__version__ = "2.10.1"
+__version__ = "2.11.0"
