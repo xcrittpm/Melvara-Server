@@ -40,6 +40,8 @@ preguntarle a Navidrome si es válida; no se guarda). Desde ahí se elige:
   dónde ha salido cada una, cuántas canciones tiene y cuándo se descargó; también se pueden renovar todas.
   Si una fuente falla, se usa la siguiente que tenga esa lista y, si fallan todas, la última buena. Apple
   Music no tiene lista mundial; ListenBrainz solo tiene la mundial.
+- **Cuánto se guarda**: horas que una búsqueda igual se responde de memoria (12 por defecto) y cada cuántas
+  horas se renuevan las listas (6).
 - **Personas**: quién usa Melvara con tu servidor, cuándo fue la última vez y con qué versión de la app.
 - **Last.fm**: activarlo o no, y su clave y secreto (si los pones aquí, sustituyen a los del `.env`). Al
   guardar, dice si Last.fm acepta la clave.

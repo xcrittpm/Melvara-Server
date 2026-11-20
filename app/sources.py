@@ -230,6 +230,16 @@ class Sources:
         self.lastfm.api_key = key if on else ""
         self.lastfm.secret = secret if on else ""
 
+    # ---------------------------------------------------------- horas (se cambian en la web)
+
+    @property
+    def search_ttl(self) -> int:
+        return int(self.settings.get("search_hours", SEARCH_TTL // 3600)) * 3600
+
+    @property
+    def chart_ttl(self) -> int:
+        return int(self.settings.get("chart_hours", FRESH // 3600)) * 3600
+
     @property
     def lastfm_has_key(self) -> bool:
         return bool(self.settings.get("lastfm_key") or self._env_key)
@@ -285,7 +295,7 @@ class Sources:
             raise ValueError("Este servidor no tiene configurada la búsqueda")
         cache_key = (wanted, " ".join(query.lower().split()))
         hit = self._searches.get(cache_key)
-        if hit and time.time() - hit[0] < SEARCH_TTL:
+        if hit and time.time() - hit[0] < self.search_ttl:
             return hit[1], wanted
         errors = []
         for name in [wanted] + [n for n in SEARCH_ORDER if n != wanted and self.available(n)]:
@@ -377,7 +387,7 @@ class Sources:
         if cached.get("stale"):
             return 0
         preferred = self._chart_order(key)[:1]
-        return FRESH if kind or not preferred or cached["source"] == preferred[0] else 3600
+        return self.chart_ttl if kind or not preferred or cached["source"] == preferred[0] else min(3600, self.chart_ttl)
 
     async def _renew(self, key: str, code: str | None, kind: str | None, value: str | None) -> None:
         try:

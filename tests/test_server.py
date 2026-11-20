@@ -843,3 +843,22 @@ def test_version_de_la_app_de_cada_persona():
     c.get("/api/v1/wishlist", headers=headers("ana"))  # una petición sin versión no la borra
     people = {p["user"]: p["app"] for p in c.get("/api/v1/admin/people", headers=headers("admin")).json()["people"]}
     assert people["ana"] == "1.3 (53)"
+
+
+def test_horas_de_cache_desde_la_web():
+    c, sources, apple, deezer = make_sources_client()
+    _login(c)
+    csrf = c.get("/admin").text.split('name="csrf" value="')[1].split('"')[0]
+    c.post("/admin/settings", data={"csrf": csrf, "search_hours": "0", "chart_hours": "99"}, follow_redirects=False)
+    assert sources.search_ttl == 0 and sources.chart_ttl == 48 * 3600
+    calls = []
+    original = deezer.search
+
+    async def counted(query, limit=30):
+        calls.append(query)
+        return await original(query, limit)
+
+    deezer.search = counted
+    c.get("/api/v1/lastfm/search", params={"q": "tusa"}, headers=headers())
+    c.get("/api/v1/lastfm/search", params={"q": "tusa"}, headers=headers())
+    assert len(calls) == 2  # con 0 horas no se guarda

@@ -117,7 +117,7 @@ main{{max-width:860px;margin:0 auto;padding:24px 16px 64px}}header{{display:flex
 h1{{font-size:22px;margin:0}}h1 small{{color:var(--mute);font-weight:400;font-size:14px}}h2{{font-size:17px;margin:0 0 8px}}
 section{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:16px 0}}
 p{{margin:6px 0}}.mute{{color:var(--mute);font-size:13px}}.warn{{color:var(--warn)}}.bad{{color:var(--bad)}}.ok{{color:var(--ok)}}
-label{{display:block;margin:6px 0}}input[type=text],input[type=password],select{{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);max-width:100%}}
+label{{display:block;margin:6px 0}}input[type=text],input[type=password],input[type=number],select{{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);max-width:100%}}
 input[type=text],input[type=password]{{width:100%}}
 button{{font:inherit;padding:8px 16px;border-radius:8px;border:0;background:var(--acc);color:#fff;cursor:pointer}}
 button.second{{background:transparent;color:var(--acc);border:1px solid var(--acc)}}button.link{{background:none;color:var(--acc);padding:0;border:0}}
@@ -240,7 +240,7 @@ def _dashboard(request: Request, user: str, token: str) -> HTMLResponse:
 {radios}</section>
 
 <section><h2>Listas de éxitos</h2>
-<p class="mute">Cada lista se descarga en el servidor, se guarda y se renueva cada 6 horas. Si su fuente falla,
+<p class="mute">Cada lista se descarga en el servidor, se guarda y se renueva cada {src.chart_ttl // 3600} horas. Si su fuente falla,
 se usa la siguiente que tenga esa lista; si fallan todas, se sigue dando la última buena. Apple Music no tiene
 lista mundial y ListenBrainz solo tiene la mundial.</p>
 <label>Fuente predeterminada
@@ -260,12 +260,19 @@ Last.fm Pro. Sin Pro, desactívalo: la búsqueda y las listas siguen con Deezer 
 <label><input type="checkbox" name="lastfm_clear" value="1"> Borrar la clave y el secreto puestos aquí{" (queda la del entorno)" if from_env else ""}</label>
 </section>
 
+<section><h2>Cuánto se guarda</h2>
+<p class="mute">Las búsquedas de «Internet» son siempre de canciones. Una búsqueda igual se responde de memoria (sin
+preguntar a Deezer o Last.fm) durante estas horas; 0 = no guardarlas.</p>
+<label>Búsquedas (horas) <input type="number" name="search_hours" min="0" max="168" value="{src.search_ttl // 3600}" style="width:90px"></label>
+<label>Listas de éxitos (horas, de 1 a 48) <input type="number" name="chart_hours" min="1" max="48" value="{src.chart_ttl // 3600}" style="width:90px"></label>
+</section>
+
 <p class="row"><button>Guardar</button></p>
 </form>
 
 {people}
 <form method="post" action="/admin/refresh">{csrf}
-<section><h2>Renovar ahora</h2><p class="mute">Descarga otra vez todas las listas sin esperar a las 6 horas.</p>
+<section><h2>Renovar ahora</h2><p class="mute">Descarga otra vez todas las listas sin esperar.</p>
 <p><button class="second">Renovar las listas</button></p></section></form>
 """
     return _page(body, user)
@@ -353,6 +360,11 @@ async def save(request: Request) -> Response:
         if chosen in CHART_ORDER and src._can(chosen, key):
             by_list[key] = chosen
     s.set("charts_by_list", by_list or None)
+    for field, low, high in (("search_hours", 0, 168), ("chart_hours", 1, 48)):
+        try:
+            s.set(field, max(low, min(high, int(form.get(field, "")))))
+        except ValueError:
+            pass
     s.set("lastfm_on", form.get("lastfm_on") == "1")
     if form.get("lastfm_clear") == "1":
         s.set("lastfm_key", None)
