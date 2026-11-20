@@ -20,6 +20,9 @@ Servicio opcional que se instala junto a tu **Navidrome** para dar a la app Melv
 - **Social**: denuncias que llegan a los administradores, la lista de personas que usan Melvara en tu servidor y
   lo que escuchan tus seguidores mutuos (solo si lo compartís).
 - **Escuchar en grupo**: tus amigos añaden canciones a tu cola escaneando un QR.
+- **Invitaciones por enlace** (2.12): desde Administración en la app se crea la cuenta y un enlace; quien lo abre
+  en su iPhone elige su contraseña y entra sola. En el enlace solo va un código de un solo uso que caduca en 7
+  días; la contraseña temporal se guarda cifrada con ese código y se borra al usarla.
 
 Detalle de cada llamada en [API.md](API.md).
 
@@ -42,6 +45,7 @@ preguntarle a Navidrome si es válida; no se guarda). Desde ahí se elige:
   Music no tiene lista mundial; ListenBrainz solo tiene la mundial.
 - **Cuánto se guarda**: horas que una búsqueda igual se responde de memoria (12 por defecto) y cada cuántas
   horas se renuevan las listas (6).
+- **Versión mínima de la app**: quien abra Melvara con una anterior ve un aviso para actualizar (se puede cerrar).
 - **Personas**: quién usa Melvara con tu servidor, cuándo fue la última vez y con qué versión de la app.
 - **Last.fm**: activarlo o no, y su clave y secreto (si los pones aquí, sustituyen a los del `.env`). Al
   guardar, dice si Last.fm acepta la clave.

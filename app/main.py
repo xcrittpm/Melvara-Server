@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from . import __version__
@@ -23,6 +23,7 @@ from .lastfm import LastFM
 from .sources import AppleMusic, Deezer, ListenBrainz, Settings, Sources
 from .extras import ExtraLists
 from .importer import ImportJobs
+from .invites import InviteError, Invites, page as invite_page
 from .jam import Jams
 from .reports import Reports
 from .social import Social
@@ -56,6 +57,8 @@ class State:
     sources: Sources
     refresher = None
     lastfm_check: str | None = None
+    invites: Invites | None = None
+    invite_limiter = RateLimiter(10)
 
 
 state = State()
@@ -64,7 +67,8 @@ state = State()
 def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: LastFM, service_token: str = "",
               reports: Reports | None = None, extras: ExtraLists | None = None,
               imports: ImportJobs | None = None, social: Social | None = None,
-              sources: Sources | None = None) -> None:
+              sources: Sources | None = None, invites: Invites | None = None) -> None:
+    state.invites = invites
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
     state.sources = sources or Sources(lastfm)
     state.social = social
@@ -104,6 +108,7 @@ async def lifespan(app):
             ImportJobs(database, os.environ["NAVIDROME_URL"]),
             Social(database, os.environ["NAVIDROME_URL"]),
             Sources(lastfm, Settings(database), database, Deezer(), AppleMusic(), ListenBrainz()),
+            Invites(database, os.environ["NAVIDROME_URL"]),
         )
         state.refresher = asyncio.get_running_loop().create_task(state.sources.keep_fresh())
         if state.service_token and len(state.service_token) < 32:
@@ -174,6 +179,93 @@ async def played(request: Request, user: str):
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ invitaciones (2.12)
+
+
+def _invites() -> Invites:
+    if state.invites is None:
+        raise LookupError("Este servidor no tiene invitaciones")
+    return state.invites
+
+
+async def invites(request: Request, user: str):
+    """Quien administra: GET = pendientes; POST {username, password, server} = crear (devuelve el enlace)."""
+    await _require_admin(request)
+    if request.method == "GET":
+        return {"invites": _invites().pending()}
+    body = await _body(request)
+    item, code = _invites().create(str(body.get("username", "")), str(body.get("password", "")),
+                                   str(body.get("server", "")), user)
+    log.info("Invitación %d para %s, creada por %s", item["id"], item["username"], user)
+    return {"invite": item, "code": code, "link": f"{str(request.base_url).rstrip('/')}/invitacion/{code}"}
+
+
+async def invite_item(request: Request, user: str):
+    await _require_admin(request)
+    try:
+        invite_id = int(request.path_params["id"])
+    except ValueError:
+        raise ValueError("Identificador no válido")
+    return {"deleted": True} if _invites().cancel(invite_id) else None
+
+
+def _invite_limited(request: Request) -> bool:
+    client = request.client.host if request.client else "?"
+    return not state.invite_limiter.allow(f"invite:{client}")
+
+
+async def invite_public(request: Request):
+    """Sin cuenta (aún no la tiene): POST /api/v1/invites/check {code} o /redeem {code, password}."""
+    if state.invites is None:
+        return _error(404, "No encontrado")
+    if _invite_limited(request):
+        return _error(429, "Demasiados intentos. Espera un minuto.")
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except json.JSONDecodeError:
+        return _error(400, "Datos no válidos")
+    if not isinstance(body, dict):
+        return _error(400, "Datos no válidos")
+    code = str(body.get("code", ""))
+    try:
+        if request.path_params["action"] == "check":
+            result = state.invites.check(code)
+        elif request.path_params["action"] == "redeem":
+            result = await state.invites.redeem(code, str(body.get("password", "")))
+        else:
+            return _error(404, "No encontrado")
+    except LookupError as e:
+        return _error(404, str(e))
+    except InviteError as e:
+        return _error(400, str(e))
+    return JSONResponse(result, headers=SECURITY_HEADERS)
+
+
+async def invite_page_route(request: Request):
+    """La página del enlace: abre Melvara con el código (no lo gasta; las vistas previas de los chats la abren)."""
+    from html import escape
+    from urllib.parse import quote
+    code = request.path_params["code"]
+    headers = {**SECURITY_HEADERS, "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
+    if state.invites is None or _invite_limited(request):
+        return HTMLResponse(invite_page("Melvara", "<h1>Invitación no disponible</h1>"), status_code=404, headers=headers)
+    try:
+        info = state.invites.check(code)
+    except LookupError as e:
+        return HTMLResponse(invite_page("Invitación a Melvara", f"<h1>Invitación no válida</h1><p>{escape(str(e))}</p>"),
+                            status_code=404, headers=headers)
+    base = str(request.base_url).rstrip("/")
+    app_link = f"melvara://invite?api={quote(base, safe='')}&code={quote(code, safe='')}"
+    host = escape(info["server"].split("://", 1)[-1])
+    body = f"""<h1>Te han invitado a Melvara</h1>
+<p>Para escuchar la música de <b>{host}</b> en tu iPhone, con la cuenta <b>{escape(info["username"])}</b>.</p>
+<a class="button" href="{escape(app_link)}">Abrir en Melvara</a>
+<a class="button second" href="https://apps.apple.com/app/id6835568116">Descargar Melvara en la App Store</a>
+<p class="mute">Al abrirla, eliges tu contraseña y ya está. Si acabas de instalar la app, vuelve a esta página y toca
+«Abrir en Melvara». La invitación sirve una sola vez y caduca en 7 días.</p>"""
+    return HTMLResponse(invite_page("Invitación a Melvara", body), headers=headers)
+
+
 async def admin_people(request: Request, user: str):
     """Para Administración en la app: quién usa Melvara en este servidor, cuándo entró y con qué versión."""
     await _require_admin(request)
@@ -192,7 +284,7 @@ async def status(request: Request):
     # «lastfm» = hay búsqueda y listas (sea de la fuente que sea): así lo entienden las apps ya instaladas.
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.sources.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "sources": state.sources.status(), "admin": True,
-                         "lastPlayed": state.social is not None, "minApp": state.sources.settings.get("min_app"), "serviceApi": bool(state.service_token),
+                         "lastPlayed": state.social is not None, "invites": state.invites is not None, "minApp": state.sources.settings.get("min_app"), "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
                          "imports": state.imports is not None, "jam": True, "jamControl": True, "social": state.social is not None},
                         headers=SECURITY_HEADERS)
@@ -574,6 +666,10 @@ app = Starlette(
         Route("/api/v1/social/people", protected(social_people), methods=["GET"]),
         Route("/api/v1/admin/people", protected(admin_people), methods=["GET"]),
         Route("/api/v1/played", protected(played), methods=["POST"]),
+        Route("/api/v1/invites", protected(invites), methods=["GET", "POST"]),
+        Route("/api/v1/invites/{action:str}", invite_public, methods=["POST"]),
+        Route("/api/v1/invites/{id:int}", protected(invite_item), methods=["DELETE"]),
+        Route("/invitacion/{code}", invite_page_route, methods=["GET"]),
         Route("/api/v1/social/visibility", protected(social_visibility), methods=["POST"]),
         Route("/api/v1/social/listening", protected(social_listening), methods=["GET", "POST"]),
         Route("/api/v1/social/listening/share", protected(social_share), methods=["POST"]),

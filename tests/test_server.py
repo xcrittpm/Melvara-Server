@@ -891,3 +891,61 @@ def test_ultima_cancion_y_version_minima():
     assert c.get("/api/v1/status").json()["minApp"] == "1.3 (53)"  # lo que no es una versión no se guarda
     c.post("/admin/settings", data={"csrf": csrf, "min_app": ""}, follow_redirects=False)
     assert c.get("/api/v1/status").json()["minApp"] is None
+
+
+def test_invitaciones():
+    import httpx
+    from app.invites import Invites
+    passwords = {"pablo": "temporal-1234"}
+    saved = {}
+
+    def navidrome(request: httpx.Request) -> httpx.Response:
+        import json as j
+        if request.url.path == "/auth/login":
+            body = j.loads(request.content)
+            if passwords.get(body["username"]) != body["password"]:
+                return httpx.Response(401, json={"error": "mal"})
+            return httpx.Response(200, json={"token": "t", "id": "u1"})
+        if request.url.path == "/api/user/u1" and request.method == "GET":
+            return httpx.Response(200, json={"id": "u1", "userName": "pablo", "name": "Pablo"})
+        if request.url.path == "/api/user/u1" and request.method == "PUT":
+            body = j.loads(request.content)
+            assert body["currentPassword"] == passwords["pablo"]
+            passwords["pablo"] = body["password"]
+            saved.update(body)
+            return httpx.Response(200, json={})
+        return httpx.Response(404)
+
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    inv = Invites(db, "http://navidrome.invalid", transport=httpx.MockTransport(navidrome))
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db), invites=inv)
+    c = TestClient(main.app)
+    assert c.get("/api/v1/status").json()["invites"] is True
+    nueva = {"username": "pablo", "password": "temporal-1234", "server": "https://musica.ejemplo.com"}
+    assert c.post("/api/v1/invites", json=nueva, headers=headers("ana")).status_code == 403
+    assert c.post("/api/v1/invites", json={**nueva, "server": "http://x"}, headers=headers("admin")).status_code == 400
+    r = c.post("/api/v1/invites", json=nueva, headers=headers("admin")).json()
+    code, link = r["code"], r["link"]
+    assert link.endswith(f"/invitacion/{code}") and "temporal" not in link and "pablo" not in link
+    # En la base de datos no está ni el código ni la contraseña temporal en claro.
+    raw = open(db, "rb").read()
+    assert code.encode() not in raw and b"temporal-1234" not in raw
+    assert [i["username"] for i in c.get("/api/v1/invites", headers=headers("admin")).json()["invites"]] == ["pablo"]
+    # La página (y su vista previa) no gasta la invitación.
+    page = c.get(f"/invitacion/{code}")
+    assert page.status_code == 200 and "melvara://invite?" in page.text and "temporal" not in page.text
+    assert c.get("/invitacion/otro").status_code == 404
+    assert c.post("/api/v1/invites/check", json={"code": code}).json() == {
+        "username": "pablo", "server": "https://musica.ejemplo.com", "expiresAt": r["invite"]["expiresAt"]}
+    assert c.post("/api/v1/invites/check", json={"code": "malo"}).status_code == 404
+    assert c.post("/api/v1/invites/redeem", json={"code": code, "password": "x"}).status_code == 400
+    r2 = c.post("/api/v1/invites/redeem", json={"code": code, "password": "mi-clave"})
+    assert r2.status_code == 200 and r2.json()["username"] == "pablo" and passwords["pablo"] == "mi-clave"
+    # Ya no vale.
+    assert c.post("/api/v1/invites/redeem", json={"code": code, "password": "otra"}).status_code == 404
+    assert c.get("/api/v1/invites", headers=headers("admin")).json()["invites"] == []
+    # Cancelar una.
+    r = c.post("/api/v1/invites", json={**nueva, "username": "eva"}, headers=headers("admin")).json()
+    assert c.delete(f"/api/v1/invites/{r['invite']['id']}", headers=headers("admin")).json()["deleted"] is True
+    assert c.post("/api/v1/invites/check", json={"code": r["code"]}).status_code == 404

@@ -23,6 +23,11 @@ ver [dónde publicarlo](README.md#dónde-publicarlo)).
 | POST | `/api/v1/import/jobs` | usuario de Navidrome | Importar en el servidor (la app puede cerrarse) |
 | GET | `/api/v1/import/jobs` · `/api/v1/import/jobs/{id}` | usuario de Navidrome | Tu última importación o una concreta: avance y resultado |
 | DELETE | `/api/v1/import/jobs/{id}` | usuario de Navidrome | Cancelarla |
+| POST | `/api/v1/invites` | administrador de Navidrome | Crear una invitación (`username`, `password` temporal, `server` https de Navidrome): devuelve `link` (2.12) |
+| GET | `/api/v1/invites` · DELETE `/api/v1/invites/{id}` | administrador de Navidrome | Invitaciones pendientes / cancelar una |
+| POST | `/api/v1/invites/check` · `/api/v1/invites/redeem` | público (con el código; 10 por minuto) | Ver a quién es / poner la contraseña elegida en Navidrome y gastarla |
+| GET | `/invitacion/{code}` | público | Página del enlace: «Abrir en Melvara» y App Store (no gasta la invitación) |
+| POST | `/api/v1/played` | usuario de Navidrome | `{"track": {title, artist, album}}`: última canción, para Administración (2.11.2) |
 | GET | `/api/v1/admin/people` | administrador de Navidrome | Todas las personas (también ocultas): último uso y versión de la app (2.11) |
 | GET | `/api/v1/social/people` | usuario de Navidrome | Quién usa Melvara en este servidor (sin ti ni los perfiles ocultos) |
 | POST | `/api/v1/social/visibility` | usuario de Navidrome | `{"hidden": true/false}`: si tu perfil está oculto |
