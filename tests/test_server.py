@@ -862,3 +862,32 @@ def test_horas_de_cache_desde_la_web():
     c.get("/api/v1/lastfm/search", params={"q": "tusa"}, headers=headers())
     c.get("/api/v1/lastfm/search", params={"q": "tusa"}, headers=headers())
     assert len(calls) == 2  # con 0 horas no se guarda
+
+
+def test_ultima_cancion_y_version_minima():
+    from app.social import Social
+    from app.sources import Settings
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "s.sqlite")
+    lastfm = FakeLastFM()
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), lastfm, "", Reports(db), ExtraLists(db),
+                   social=Social(db, "http://navidrome.invalid"), sources=Sources(lastfm, Settings(db), db))
+    c = TestClient(main.app)
+    assert c.get("/api/v1/status").json()["lastPlayed"] is True
+    assert c.post("/api/v1/played", json={"track": {"artist": "X"}}, headers=headers("ana")).status_code == 400
+    c.post("/api/v1/played", json={"track": {"title": "Tusa", "artist": "KAROL G", "album": "KG0516", "extra": 1}},
+           headers=headers("ana"))
+    people = {p["user"]: p for p in c.get("/api/v1/admin/people", headers=headers("admin")).json()["people"]}
+    assert people["ana"]["lastTrack"] == {"title": "Tusa", "artist": "KAROL G", "album": "KG0516"}
+    assert people["ana"]["lastPlayedAt"]
+    # Versión mínima desde la web.
+    _login(c)
+    page = c.get("/admin").text
+    assert "Tusa" in page and "Versión mínima" in page
+    csrf = page.split('name="csrf" value="')[1].split('"')[0]
+    c.post("/admin/settings", data={"csrf": csrf, "min_app": "1.3 (53)"}, follow_redirects=False)
+    assert c.get("/api/v1/status").json()["minApp"] == "1.3 (53)"
+    c.post("/admin/settings", data={"csrf": csrf, "min_app": "cualquier cosa"}, follow_redirects=False)
+    assert c.get("/api/v1/status").json()["minApp"] == "1.3 (53)"  # lo que no es una versión no se guarda
+    c.post("/admin/settings", data={"csrf": csrf, "min_app": ""}, follow_redirects=False)
+    assert c.get("/api/v1/status").json()["minApp"] is None

@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import html
 import logging
+import re
 import secrets
 import time
 from urllib.parse import parse_qs, urlparse
@@ -162,6 +163,14 @@ def _app(version: str | None) -> str:
     return f"compilación {version[1:-1]}" if version.startswith("(") else version
 
 
+def _track(person: dict) -> str:
+    track = person.get("lastTrack")
+    if not track:
+        return '<span class="mute">—</span>'
+    return (f'{html.escape(track["title"])} · <span class="mute">{html.escape(track["artist"])} · '
+            f'{_ago(person.get("lastPlayedAt"))}</span>')
+
+
 def _options(selected: str, names: list[str], default_label: str | None = None) -> str:
     out = [f'<option value=""{" selected" if not selected else ""}>{html.escape(default_label)}</option>'] \
         if default_label is not None else []
@@ -228,10 +237,11 @@ def _dashboard(request: Request, user: str, token: str) -> HTMLResponse:
     if st.social is not None:
         prow = "".join(
             f'<tr><td>{html.escape(p["user"])}{" <span class=mute>(oculto)</span>" if p["hidden"] else ""}</td>'
-            f'<td>{_ago(p["lastSeen"])}</td><td>{html.escape(_app(p["app"]))}</td></tr>' for p in st.social.everyone())
+            f'<td>{_ago(p["lastSeen"])}</td><td>{html.escape(_app(p["app"]))}</td><td>{_track(p)}</td></tr>'
+            for p in st.social.everyone())
         people = (f'<section><h2>Personas</h2><p class="mute">Quién ha usado Melvara con este servidor, cuándo fue la '
                   f'última vez y con qué versión de la app (las anteriores a la 52 solo dicen la compilación).</p>'
-                  f'<div class="table"><table><tr><th>Usuario</th><th>Último uso</th><th>App</th></tr>{prow}</table></div>'
+                  f'<div class="table"><table><tr><th>Usuario</th><th>Último uso</th><th>App</th><th>Última canción</th></tr>{prow}</table></div>'
                   f'</section>')
     body = f"""{_message(request)}
 <form method="post" action="/admin/settings">{csrf}
@@ -265,6 +275,13 @@ Last.fm Pro. Sin Pro, desactívalo: la búsqueda y las listas siguen con Deezer 
 preguntar a Deezer o Last.fm) durante estas horas; 0 = no guardarlas.</p>
 <label>Búsquedas (horas) <input type="number" name="search_hours" min="0" max="168" value="{src.search_ttl // 3600}" style="width:90px"></label>
 <label>Listas de éxitos (horas, de 1 a 48) <input type="number" name="chart_hours" min="1" max="48" value="{src.chart_ttl // 3600}" style="width:90px"></label>
+</section>
+
+<section><h2>Versión mínima de la app</h2>
+<p class="mute">Quien abra Melvara con una versión anterior verá un aviso para actualizar desde la App Store. Puede
+cerrarlo y seguir usando la app (vuelve a salir al día siguiente). Escribe la versión, p. ej. <code>1.3</code>, o
+versión y compilación, p. ej. <code>1.3 (53)</code>. Vacío = sin aviso. Lo entienden las apps desde la 1.3 (53).</p>
+<label>Versión mínima <input type="text" name="min_app" value="{html.escape(s.get("min_app") or "")}" style="width:140px" placeholder="1.3 (53)"></label>
 </section>
 
 <p class="row"><button>Guardar</button></p>
@@ -365,6 +382,9 @@ async def save(request: Request) -> Response:
             s.set(field, max(low, min(high, int(form.get(field, "")))))
         except ValueError:
             pass
+    min_app = form.get("min_app", "").strip()
+    if not min_app or re.fullmatch(r"\d+(\.\d+){0,2}( \(\d+\))?", min_app):
+        s.set("min_app", min_app or None)
     s.set("lastfm_on", form.get("lastfm_on") == "1")
     if form.get("lastfm_clear") == "1":
         s.set("lastfm_key", None)

@@ -167,6 +167,13 @@ def app_version(request: Request) -> str | None:
     return f"({match.group(1)})" if match else None
 
 
+async def played(request: Request, user: str):
+    """La app avisa de cada canción que empieza (para «Última canción» en Administración)."""
+    body = await _body(request)
+    _social().last_played(user, body.get("track"))
+    return {"ok": True}
+
+
 async def admin_people(request: Request, user: str):
     """Para Administración en la app: quién usa Melvara en este servidor, cuándo entró y con qué versión."""
     await _require_admin(request)
@@ -184,7 +191,8 @@ async def status(request: Request):
     # Público (sin datos): la app lo usa para saber que aquí hay un Melvara Server.
     # «lastfm» = hay búsqueda y listas (sea de la fuente que sea): así lo entienden las apps ya instaladas.
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.sources.enabled,
-                         "lastfmAuth": state.lastfm.can_sign, "sources": state.sources.status(), "admin": True, "serviceApi": bool(state.service_token),
+                         "lastfmAuth": state.lastfm.can_sign, "sources": state.sources.status(), "admin": True,
+                         "lastPlayed": state.social is not None, "minApp": state.sources.settings.get("min_app"), "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
                          "imports": state.imports is not None, "jam": True, "jamControl": True, "social": state.social is not None},
                         headers=SECURITY_HEADERS)
@@ -565,6 +573,7 @@ app = Starlette(
         Route("/api/v1/import/jobs", protected(import_jobs), methods=["GET", "POST"]),
         Route("/api/v1/social/people", protected(social_people), methods=["GET"]),
         Route("/api/v1/admin/people", protected(admin_people), methods=["GET"]),
+        Route("/api/v1/played", protected(played), methods=["POST"]),
         Route("/api/v1/social/visibility", protected(social_visibility), methods=["POST"]),
         Route("/api/v1/social/listening", protected(social_listening), methods=["GET", "POST"]),
         Route("/api/v1/social/listening/share", protected(social_share), methods=["POST"]),

@@ -97,6 +97,9 @@ class Social:
             columns = {r[1] for r in self._db.execute("PRAGMA table_info(social_users)")}
             if "app" not in columns:  # 2.11: versión de la app con la que entró por última vez
                 self._db.execute("ALTER TABLE social_users ADD COLUMN app TEXT")
+            if "last_track" not in columns:  # 2.11.2: última canción (solo la ve quien administra)
+                self._db.execute("ALTER TABLE social_users ADD COLUMN last_track TEXT")
+                self._db.execute("ALTER TABLE social_users ADD COLUMN last_played_at INTEGER")
             self._db.commit()
         self._apps: dict[str, str] = {}
 
@@ -122,11 +125,29 @@ class Social:
             self._db.commit()
 
     def everyone(self) -> list[dict]:
-        """Para quien administra: todas las personas (también las ocultas), cuándo entraron y con qué versión."""
+        """Para quien administra: todas las personas (también las ocultas), cuándo entraron, con qué versión y
+        la última canción que pusieron con Melvara."""
         with self._lock:
-            rows = self._db.execute("SELECT username, last_seen, app, hidden FROM social_users "
-                                    "ORDER BY last_seen DESC").fetchall()
-        return [{"user": r[0], "lastSeen": r[1], "app": r[2], "hidden": bool(r[3])} for r in rows]
+            rows = self._db.execute("SELECT username, last_seen, app, hidden, last_track, last_played_at "
+                                    "FROM social_users ORDER BY last_seen DESC").fetchall()
+        return [{"user": r[0], "lastSeen": r[1], "app": r[2], "hidden": bool(r[3]),
+                 "lastTrack": json.loads(r[4]) if r[4] else None, "lastPlayedAt": r[5]} for r in rows]
+
+    def last_played(self, username: str, track) -> None:
+        """La última canción que alguien ha puesto (título, artista y álbum), para Administración. Se guarda
+        siempre, compartas o no lo que escuchas con tus amigos: solo la ve quien administra el servidor."""
+        if not isinstance(track, dict):
+            raise ValueError("Falta la canción")
+        clean = {k: str(track.get(k) or "")[:200] for k in ("title", "artist", "album")}
+        if not clean["title"]:
+            raise ValueError("Falta la canción")
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO social_users (username, last_seen, last_track, last_played_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(username) DO UPDATE SET last_track = excluded.last_track, "
+                "last_played_at = excluded.last_played_at",
+                (username, int(time.time()), json.dumps(clean, ensure_ascii=False), int(time.time())))
+            self._db.commit()
 
     def set_hidden(self, username: str, hidden: bool) -> None:
         with self._lock:
