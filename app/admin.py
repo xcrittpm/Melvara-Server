@@ -282,6 +282,8 @@ preguntar a Deezer o Last.fm) durante estas horas; 0 = no guardarlas.</p>
 cerrarlo y seguir usando la app (vuelve a salir al día siguiente). Escribe la versión, p. ej. <code>1.3</code>, o
 versión y compilación, p. ej. <code>1.3 (53)</code>. Vacío = sin aviso. Lo entienden las apps desde la 1.3 (53).</p>
 <label>Versión mínima <input type="text" name="min_app" value="{html.escape(s.get("min_app") or "")}" style="width:140px" placeholder="1.3 (53)"></label>
+<label>Versión mínima en Android <input type="text" name="min_android" value="{html.escape(s.get("min_android") or "")}" style="width:140px" placeholder="0.3"></label>
+<p class="mute">Android tiene su propia numeración (0.3, 0.4…); el aviso lleva a la página de descargas. Lo entiende Android desde la 0.3.</p>
 </section>
 
 <p class="row"><button>Guardar</button></p>
@@ -385,6 +387,9 @@ async def save(request: Request) -> Response:
     min_app = form.get("min_app", "").strip()
     if not min_app or re.fullmatch(r"\d+(\.\d+){0,2}( \(\d+\))?", min_app):
         s.set("min_app", min_app or None)
+    min_android = form.get("min_android", "").strip()
+    if not min_android or re.fullmatch(r"\d+(\.\d+){0,2}( \(\d+\))?", min_android):
+        s.set("min_android", min_android or None)
     s.set("lastfm_on", form.get("lastfm_on") == "1")
     if form.get("lastfm_clear") == "1":
         s.set("lastfm_key", None)

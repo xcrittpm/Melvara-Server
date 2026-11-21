@@ -891,6 +891,12 @@ def test_ultima_cancion_y_version_minima():
     assert c.get("/api/v1/status").json()["minApp"] == "1.3 (53)"  # lo que no es una versión no se guarda
     c.post("/admin/settings", data={"csrf": csrf, "min_app": ""}, follow_redirects=False)
     assert c.get("/api/v1/status").json()["minApp"] is None
+    # Android tiene la suya.
+    c.post("/admin/settings", data={"csrf": csrf, "min_app": "1.4", "min_android": "0.3"}, follow_redirects=False)
+    status = c.get("/api/v1/status").json()
+    assert status["minAndroid"] == "0.3" and status["minApp"] == "1.4"
+    c.post("/admin/settings", data={"csrf": csrf, "min_android": "x"}, follow_redirects=False)
+    assert c.get("/api/v1/status").json()["minAndroid"] == "0.3"
 
 
 def test_invitaciones():

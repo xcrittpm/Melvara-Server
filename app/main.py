@@ -311,7 +311,7 @@ async def status(request: Request):
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.sources.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "sources": state.sources.status(), "admin": True,
                          "lastPlayed": state.social is not None, "invites": state.invites is not None,
-                         "dislikes": state.dislikes is not None, "minApp": state.sources.settings.get("min_app"), "serviceApi": bool(state.service_token),
+                         "dislikes": state.dislikes is not None, "minApp": state.sources.settings.get("min_app"), "minAndroid": state.sources.settings.get("min_android"), "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
                          "imports": state.imports is not None, "jam": True, "jamControl": True, "social": state.social is not None},
                         headers=SECURITY_HEADERS)
