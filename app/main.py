@@ -25,6 +25,7 @@ from .extras import ExtraLists
 from .importer import ImportJobs
 from .invites import InviteError, Invites, page as invite_page
 from .dislikes import Dislikes
+from .similar import SimilarArtists
 from .jam import Jams
 from .reports import Reports
 from .social import Social
@@ -60,6 +61,7 @@ class State:
     lastfm_check: str | None = None
     invites: Invites | None = None
     dislikes: Dislikes | None = None
+    similar: SimilarArtists | None = None
     invite_limiter = RateLimiter(10)
 
 
@@ -70,8 +72,9 @@ def configure(auth: Auth, limiter: RateLimiter, wishlist: Wishlist, lastfm: Last
               reports: Reports | None = None, extras: ExtraLists | None = None,
               imports: ImportJobs | None = None, social: Social | None = None,
               sources: Sources | None = None, invites: Invites | None = None,
-              dislikes: Dislikes | None = None) -> None:
+              dislikes: Dislikes | None = None, similar: SimilarArtists | None = None) -> None:
     state.invites = invites
+    state.similar = similar
     state.dislikes = dislikes
     state.auth, state.limiter, state.wishlist, state.lastfm = auth, limiter, wishlist, lastfm
     state.sources = sources or Sources(lastfm)
@@ -114,6 +117,7 @@ async def lifespan(app):
             Sources(lastfm, Settings(database), database, Deezer(), AppleMusic(), ListenBrainz()),
             Invites(database, os.environ["NAVIDROME_URL"]),
             Dislikes(database),
+            SimilarArtists(database),
         )
         state.refresher = asyncio.get_running_loop().create_task(state.sources.keep_fresh())
         if state.service_token and len(state.service_token) < 32:
@@ -198,6 +202,17 @@ async def dislikes(request: Request, user: str):
     if request.method == "GET":
         return {"items": _dislikes().list(user)}
     return {"item": _dislikes().add(user, await _body(request))}
+
+
+async def similar_artists(request: Request, user: str):
+    """GET ?name=Artista (hasta 3 veces) → {artists: {nombre: [parecidos…]}}. Para ∞ y la radio (2.14)."""
+    if state.similar is None:
+        raise LookupError("Este servidor no tiene artistas parecidos")
+    names = [n for n in request.query_params.getlist("name") if n.strip()][:3]
+    if not names:
+        raise ValueError("Falta el nombre del artista")
+    results = await asyncio.gather(*(state.similar.get(n) for n in names))
+    return {"artists": dict(zip(names, results))}
 
 
 async def dislike_item(request: Request, user: str):
@@ -311,7 +326,7 @@ async def status(request: Request):
     return JSONResponse({"service": "melvara-api", "version": __version__, "lastfm": state.sources.enabled,
                          "lastfmAuth": state.lastfm.can_sign, "sources": state.sources.status(), "admin": True,
                          "lastPlayed": state.social is not None, "invites": state.invites is not None,
-                         "dislikes": state.dislikes is not None, "minApp": state.sources.settings.get("min_app"), "minAndroid": state.sources.settings.get("min_android"), "serviceApi": bool(state.service_token),
+                         "dislikes": state.dislikes is not None, "similar": state.similar is not None, "minApp": state.sources.settings.get("min_app"), "minAndroid": state.sources.settings.get("min_android"), "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
                          "imports": state.imports is not None, "jam": True, "jamControl": True, "social": state.social is not None},
                         headers=SECURITY_HEADERS)
@@ -694,6 +709,7 @@ app = Starlette(
         Route("/api/v1/admin/people", protected(admin_people), methods=["GET"]),
         Route("/api/v1/played", protected(played), methods=["POST"]),
         Route("/api/v1/dislikes", protected(dislikes), methods=["GET", "POST"]),
+        Route("/api/v1/similar/artists", protected(similar_artists), methods=["GET"]),
         Route("/api/v1/dislikes/{kind}/{id:path}", protected(dislike_item), methods=["DELETE"]),
         Route("/api/v1/invites", protected(invites), methods=["GET", "POST"]),
         Route("/api/v1/invites/{action:str}", invite_public, methods=["POST"]),

@@ -372,3 +372,11 @@ Siempre con un mensaje: `{"error": "…"}`.
 | 401 | Falta el acceso o no es válido en Navidrome; o el token de servicio falta o es incorrecto |
 | 404 | No existe (una canción de la lista; o la ruta de servicio sin `SERVICE_TOKEN` configurado) |
 | 429 | Demasiadas peticiones: hay un límite por minuto (`RATE_LIMIT_PER_MINUTE`, 120 por defecto), por usuario y, aparte, para la ruta de servicio |
+
+## Artistas parecidos (2.14)
+
+`GET /api/v1/similar/artists?name=Bonobo[&name=…]` (hasta 3 nombres) → `{"artists": {"Bonobo": ["Four Tet", "Boards of
+Canada", …]}}`. Mezcla por turnos los artistas relacionados de **Deezer** y los que se escuchan en la misma sesión según
+**ListenBrainz** (con el identificador de MusicBrainz). Se guardan 30 días (un día si no se encontró nada). Solo sale el
+nombre del artista, nunca quién lo pide. `status.similar` = disponible. La app los cruza con los artistas de Navidrome
+para ∞.

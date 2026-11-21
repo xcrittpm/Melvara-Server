@@ -1,5 +1,6 @@
 """Pruebas de Melvara Server (sin red: Navidrome y Last.fm se simulan)."""
 
+import asyncio
 import os
 import sys
 import tempfile
@@ -975,3 +976,40 @@ def test_no_me_gusta_de_cada_persona():
     assert c.delete("/api/v1/dislikes/artist/ar/2", headers=headers("ana")).json()["deleted"] is True
     assert c.delete("/api/v1/dislikes/artist/ar/2", headers=headers("ana")).status_code == 404
     assert [i["id"] for i in c.get("/api/v1/dislikes", headers=headers("ana")).json()["items"]] == ["s1"]
+
+
+def test_similar_artists(tmp_path):
+    """Artistas parecidos: Deezer + ListenBrainz por turnos, sin repetir ni el propio, y guardados 30 días."""
+    import httpx as _hx
+    from app.similar import SimilarArtists, merge
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.host + request.url.path)
+        path = request.url.path
+        if path == "/search/artist":
+            return _hx.Response(200, json={"data": [{"id": 1, "name": "Bonobo", "nb_fan": 5},
+                                                    {"id": 2108, "name": "Bonobo", "nb_fan": 366814}]})
+        if path == "/artist/2108/related":
+            return _hx.Response(200, json={"data": [{"name": "Four Tet"}, {"name": "Tycho"}, {"name": "Bonobo"}]})
+        if path == "/ws/2/artist/":
+            return _hx.Response(200, json={"artists": [{"id": "mb-1", "name": "Bonobo", "score": 100}]})
+        if path == "/similar-artists/json":
+            return _hx.Response(200, json=[{"name": "Massive Attack", "score": 3}, {"name": "four tet", "score": 9}])
+        return _hx.Response(404)
+
+    sim = SimilarArtists(str(tmp_path / "s.sqlite"), _hx.AsyncClient(transport=_hx.MockTransport(handler)))
+    names = asyncio.run(sim.get("Bonobo"))
+    assert names == ["Four Tet", "Tycho", "Massive Attack"]
+    before = len(calls)
+    assert asyncio.run(sim.get("bonobo")) == names and len(calls) == before   # de la caché, sin preguntar fuera
+    assert merge(["A", "B"], ["b", "C"], exclude="A") == ["b", "C"]
+
+    db = str(tmp_path / "m.sqlite")
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db),
+                   similar=SimilarArtists(db, _hx.AsyncClient(transport=_hx.MockTransport(handler))))
+    c = TestClient(main.app)
+    assert c.get("/api/v1/status").json()["similar"] is True
+    r = c.get("/api/v1/similar/artists", params=[("name", "Bonobo")], headers=headers())
+    assert r.json()["artists"]["Bonobo"][:2] == ["Four Tet", "Tycho"]
+    assert c.get("/api/v1/similar/artists", headers=headers()).status_code == 400

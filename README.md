@@ -19,6 +19,8 @@ Servicio opcional que se instala junto a tu **Navidrome** para dar a la app Melv
 - **Listas extra** (por etiqueta o usuario de Last.fm, o de un artista) que elige quien administra.
 - **Social**: denuncias que llegan a los administradores, la lista de personas que usan Melvara en tu servidor y
   lo que escuchan tus seguidores mutuos (solo si lo compartís).
+- **∞ más acertado** (2.14): artistas parecidos de Deezer y ListenBrainz, gratis y sin clave, para que ∞ siga con
+  música de verdad parecida aunque Last.fm deje de funcionar.
 - **Escuchar en grupo**: tus amigos añaden canciones a tu cola escaneando un QR.
 - **Invitaciones por enlace** (2.12): desde Administración en la app se crea la cuenta y un enlace; quien lo abre
   en su iPhone elige su contraseña y entra sola. En el enlace solo va un código de un solo uso que caduca en 7
