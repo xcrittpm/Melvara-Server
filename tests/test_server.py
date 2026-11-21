@@ -13,7 +13,7 @@ from app import main  # noqa: E402
 from app.auth import Auth, RateLimiter  # noqa: E402
 from app.lastfm import LastFM  # noqa: E402
 from app.extras import ExtraLists  # noqa: E402
-from app.importer import ImportJobs, find_track, match_library, tokens  # noqa: E402
+from app.importer import ImportJobs, find_track, match_library, match_rank, pick_match, tokens  # noqa: E402
 from app.reports import Reports  # noqa: E402
 from app.wishlist import Wishlist  # noqa: E402
 
@@ -1013,3 +1013,80 @@ def test_similar_artists(tmp_path):
     r = c.get("/api/v1/similar/artists", params=[("name", "Bonobo")], headers=headers())
     assert r.json()["artists"]["Bonobo"][:2] == ["Four Tet", "Tycho"]
     assert c.get("/api/v1/similar/artists", headers=headers()).status_code == 400
+
+
+def _song(title, artist, album=""):
+    return {"title": title, "artist": artist, "album": album}
+
+
+def _t(title, artist, id="x", album=""):
+    return {"id": id, "title": title, "artist": artist, "album": album}
+
+
+def test_misma_cancion_aunque_la_version_vaya_tras_un_guion():
+    """Importación del 21/11: 76 de 180 estaban como «Título - Versión» y Apple las llama «Título (Versión)»."""
+    cases = [
+        ("Faded (Piano Version)", "Alan Walker", "Faded - Piano Version", "Alan Walker"),
+        ("Havana (Remix)", "Camila Cabello & Daddy Yankee", "Havana - Remix", "Camila Cabello, Daddy Yankee"),
+        ("MALAMENTE (Cap.1: Augurio)", "ROSALÍA", "MALAMENTE - Cap.1: Augurio", "ROSALÍA"),
+        ("Me Llamas (Remix) [feat. Maluma]", "Piso 21", "Me Llamas (feat. Maluma) - Remix", "Piso 21, Maluma"),
+        ("Tumbando el Club (Remix) [feat. Cro, Duki]", "Neo Pistea", "Tumbando el Club (feat. C.R.O, Duki) - Remix", "Neo Pistea"),
+        ("Plegarias (Acústico) [Premios Gardel 2020]", "NICKI NICOLE", "Plegarias - Acústico Premios Gardel 2020", "Nicki Nicole"),
+        ("Quevedo: Bzrp Music Sessions, Vol. 52/66", "Bizarrap & Quevedo", "Quevedo: Bzrp Music Sessions, Vol. 52", "Bizarrap, Quevedo"),
+        ("Pop Ur P***y", "C. Tangana", "Pop Ur Pussy", "C. Tangana"),
+        ("ME SUDA LA P***A", "Funzo & Baby Loud", "ME SUDA LA POLLA", "Funzo & Baby Loud"),
+        ("+", "Aitana & Cali y El Dandee", "+", "Aitana, Cali Y El Dandee"),
+        ("%", "Hens", "%", "Hens"),
+    ]
+    for title, artist, server_title, server_artist in cases:
+        assert match_rank(_song(title, artist), _t(server_title, server_artist)) == 0, title
+
+
+def test_mismo_artista_escrito_de_otra_forma_con_el_mismo_titulo():
+    assert match_rank(_song("Pronto", "Fresquito y Mango & Mango"), _t("Pronto", "Fresquito, Mango")) == 1
+    assert match_rank(_song("Miente", "John Põ, C Marí & Tylerb"), _t("Miente", "John Pollõn, C Marí, TylerB")) == 1
+    assert match_rank(_song("Ya No Me Extrañas (feat. Luck Ra)", "Rusher King"), _t("Ya no me extrañas", "Rusherking")) == 1
+    # Otro artista de verdad, aunque el título sea el mismo: no.
+    assert match_rank(_song("Pronto", "Fresquito y Mango & Mango"), _t("Pronto", "Danny Ocean")) is None
+    assert match_rank(_song("Si Te Vas", "Willy H"), _t("Si Te Vas", "Feid")) is None
+    # Con el artista escrito de otra forma, solo si el título es el mismo (no una variante).
+    assert match_rank(_song("Pronto", "Fresquito y Mango & Mango"), _t("Pronto (Remix)", "Fresquito, Mango")) is None
+
+
+def test_mismo_nombre_con_otro_anadido_que_no_es_una_version():
+    assert match_rank(_song("Nada (feat. Leslie Grace) [Inédita 2015]", "Dvicio"), _t("Nada (feat. Leslie Grace)", "Dvicio, Leslie Grace")) == 2
+    assert match_rank(_song("Sorry, Blame It On Me (Main)", "Akon"), _t("Sorry, Blame It On Me", "Akon")) == 2
+    # Con dos iguales de parecidas, la que tiene al artista invitado.
+    song = _song("Nada (feat. Leslie Grace) [Inédita 2015]", "Dvicio")
+    assert pick_match(song, [_t("Nada", "Dvicio", "sola"), _t("Nada (feat. Leslie Grace)", "Dvicio, Leslie Grace", "con")]) == "con"
+    assert match_rank(_song('Levitate (From "Passengers")', "Imagine Dragons"),
+                      _t("Levitate - From The Original Motion Picture “Passengers”", "Imagine Dragons")) == 2
+
+
+def test_nunca_otra_version():
+    """Si en el servidor solo está la original (o una versión distinta), no es la que se pide."""
+    no = [
+        ("Tiroteo (Remix)", "Marc Segui, Rauw Alejandro & Pol Granch", "Tiroteo", "Marc Seguí"),
+        ("En Paz (Acústica)", "Walls", "En Paz", "Walls"),
+        ("All of the Stars (Soundtrack Version)", "Ed Sheeran", "All of the Stars", "Ed Sheeran"),
+        ("Demonios y Bares de Viejos (Instrumental)", "Costa", "Demonios y Bares de Viejos", "Costa, Ikki"),
+        ("Lonely (Old Version) [Dirty]", "Akon", "Lonely", "Akon"),
+        ("I'll Be There for You (Theme from Friends) [Re-Recorded]", "The Rembrandts", 'I\'ll Be There for You - From "Friends"', "The Rembrandts"),
+        ("Pumpin Blood (The Jane Doze Remix)", "NONONO", "Pumpin Blood - Belarbi Remix", "NONONO, Belarbi"),
+        ("Snow Tha Product: Bzrp Music Sessions, Vol. 39/66", "Bizarrap & Snow Tha Product",
+         "Snow Tha Product: Bzrp Music Session , Vol. 39 (Omar Varela Remix)", "Omar Varela"),
+    ]
+    for title, artist, server_title, server_artist in no:
+        assert match_rank(_song(title, artist), _t(server_title, server_artist)) is None, title
+
+
+def test_lo_de_antes_sigue_igual():
+    # «Despacito» de Apple es «Despacito - Remastered 2011» del archivo (lo de siempre).
+    assert match_rank(_song("Despacito", "Luis Fonsi"), _t("Despacito - Remastered 2011", "Luis Fonsi")) == 0
+    # Una variante del servidor vale si no hay nada mejor, y la exacta gana.
+    song = _song("Despacito", "Luis Fonsi")
+    assert pick_match(song, [_t("Despacito (Remix)", "Luis Fonsi", "v"), _t("Despacito", "Luis Fonsi", "e")]) == "e"
+    assert pick_match(song, [_t("Despacito (Remix)", "Luis Fonsi", "v")]) == "v"
+    # El mismo álbum, si lo hay.
+    song = _song("Hola", "Alguien", "Dos")
+    assert pick_match(song, [_t("Hola", "Alguien", "a", "Uno"), _t("Hola", "Alguien", "b", "Dos")]) == "b"

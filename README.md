@@ -15,7 +15,10 @@ Servicio opcional que se instala junto a tu **Navidrome** para dar a la app Melv
   búsqueda y las listas siguen con las otras fuentes.
 - **Lista de deseos**: guardar esas canciones (título, artista, álbum y año; nunca música) para conseguirlas
   después. Cada persona ve solo la suya.
-- **Importar en el servidor**: traer tu biblioteca de Apple Music, Spotify o Plex aunque cierres la app.
+- **Importar en el servidor**: traer tu biblioteca de Apple Music, Spotify o Plex aunque cierres la app. Desde la
+  2.15 reconoce la misma canción aunque la versión se escriba distinto («Faded (Piano Version)» = «Faded - Piano
+  Version»), las Bzrp («Vol. 52/66» = «Vol. 52»), los títulos tapados con asteriscos y el artista escrito de otra
+  forma («Rusher King» = «Rusherking»), sin aceptar nunca otra versión (remix, acústico, en directo…).
 - **Listas extra** (por etiqueta o usuario de Last.fm, o de un artista) que elige quien administra.
 - **Social**: denuncias que llegan a los administradores, la lista de personas que usan Melvara en tu servidor y
   lo que escuchan tus seguidores mutuos (solo si lo compartís).

@@ -49,8 +49,13 @@ def tokens(s: str) -> list[str]:
     return [t for t in re.split(r"[^\w]+|_", s) if t]
 
 
+_FEAT = re.compile(r"\s*[\(\[](feat|ft|with|con)\.?[^\)\]]*[\)\]]", re.IGNORECASE)
+# «Bzrp Music Sessions, Vol. 52/66» (Apple) = «… Vol. 52» (en los archivos).
+_VOL = re.compile(r"(vol\.?\s*\d+)\s*/\s*\d+", re.IGNORECASE)
+
+
 def clean_title(s: str) -> str:
-    t = re.sub(r"\s*[\(\[](feat|ft|with|con)\.?[^\)\]]*[\)\]]", "", s, flags=re.IGNORECASE)
+    t = _FEAT.sub("", _VOL.sub(r"\1", s))
     t = re.sub(r"\s+-\s+.*$", "", t)
     return t.strip()
 
@@ -134,55 +139,178 @@ class Navidrome:
                             post=True)
 
 
-async def find_track(nd: Navidrome, song: dict) -> str | None:
-    """El id de la canción en Navidrome (o None). Igual que findTrack en la app."""
-    title = clean_title(song.get("title", ""))
-    artist = song.get("artist", "")
-    main_artist = tokens(re.split(r"[,&]", artist)[0] if artist else "")
-    words = " ".join(tokens(title))
-    if not words:
+# ------------------------------------------------------------------ ¿es la misma canción? (igual que la app)
+#
+# Desde la 2.15. Antes solo se comparaba el título «limpio» (sin «feat.» y sin lo que va tras « - »), y Apple escribe
+# la versión entre paréntesis («Faded (Piano Version)») mientras los archivos la llevan tras un guion («Faded - Piano
+# Version»): 76 de 180 canciones que ya estaban no se encontraban. Las reglas nuevas se suman a las de antes.
+
+# Palabras que hacen que sea **otra versión**: con ellas nunca se acepta un título distinto.
+_VERSION_WORDS = {
+    "remix", "rmx", "mix", "remixed", "edit", "acoustic", "acustico", "acustica", "live", "vivo", "directo",
+    "concierto", "concert", "unplugged", "instrumental", "karaoke", "version", "versao", "demo", "remaster",
+    "remastered", "remasterizado", "recorded", "cover", "sped", "slowed", "reverb", "extended", "radio", "dub",
+    "rework", "bootleg", "vip", "orchestral", "symphonic", "piano", "acapella", "cappella", "tiny", "session",
+}
+# Palabras de enlace que no cuentan al comparar artistas sin espacios («Fresquito y Mango» = «Fresquito, Mango»).
+_LINK_WORDS = {"y", "and", "e", "the", "el", "la", "los", "las", "x"}
+
+
+def full_title(s: str) -> str:
+    """Todo el título sin «feat.»: «Faded - Piano Version» = «Faded (Piano Version)» = «faded piano version»."""
+    return " ".join(tokens(_FEAT.sub("", _VOL.sub(r"\1", s))))
+
+
+def base_title(s: str) -> str:
+    """Solo el nombre, sin nada entre paréntesis ni tras « - »: «Levitate (From "Passengers")» → «levitate»."""
+    t = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", _VOL.sub(r"\1", s))
+    return " ".join(tokens(re.sub(r"\s+-\s+.*$", "", t)))
+
+
+def _is_version(words: list[str]) -> bool:
+    return any(w in _VERSION_WORDS for w in words)
+
+
+def _censored(title: str) -> list[re.Pattern] | None:
+    """«Pop Ur P***y» (Apple tapa palabras con asteriscos) → patrones por palabra; None si no hay asteriscos."""
+    if "*" not in title:
         return None
+    patterns = []
+    for w in fold(clean_title(title)).split():
+        w = re.sub(r"[^\w*]", "", w)
+        if w:
+            patterns.append(re.compile("^" + re.sub(r"(\\\*)+", r"\\w+", re.escape(w)) + "$"))
+    return patterns
 
-    def same_artist(t: dict) -> bool:
-        have = tokens(f"{t.get('artist', '')} {t.get('displayArtist', '')} {t.get('displayAlbumArtist', '')}")
-        return all(a in have for a in main_artist)
 
-    def norm_title(t: dict) -> str:
-        return " ".join(tokens(clean_title(t.get("title", ""))))
+def _censored_match(patterns: list[re.Pattern], title: str) -> bool:
+    words = [w for w in (re.sub(r"[^\w]", "", x) for x in fold(clean_title(title)).split()) if w]
+    return len(words) == len(patterns) and all(p.match(w) for p, w in zip(patterns, words))
 
-    queries = [f"{words} {' '.join(main_artist)}", words]
+
+def main_artist_tokens(artist: str) -> list[str]:
+    return tokens(re.split(r"[,&]", artist)[0] if artist else "")
+
+
+def _artist_words(t: dict) -> list[str]:
+    return tokens(f"{t.get('artist', '')} {t.get('displayArtist', '')} {t.get('displayAlbumArtist', '')}")
+
+
+def same_artist(main: list[str], t: dict) -> bool:
+    have = _artist_words(t)
+    return all(a in have for a in main)
+
+
+def similar_artist(main: list[str], t: dict) -> bool:
+    """El mismo artista escrito de otra forma: «Rusher King» / «Rusherking», «John Põ» / «John Pollõn»,
+    «Fresquito y Mango» / «Fresquito, Mango». Solo se usa cuando el título coincide del todo."""
+    key = "".join(a for a in main if a not in _LINK_WORDS)
+    return len(key) >= 4 and key in "".join(w for w in _artist_words(t) if w not in _LINK_WORDS)
+
+
+def match_rank(song: dict, t: dict) -> int | None:
+    """Cuánto se parece la canción `t` del servidor a `song` (del proveedor): 0 mismo título y artista, 1 mismo título
+    y el artista escrito de otra forma, 2 el mismo nombre con otro añadido que no es una versión («Nada [Inédita
+    2015]» / «Nada»), 3 una variante (el título del servidor sigue: «Despacito» / «Despacito (Remix)»); None: no es."""
+    title = song.get("title", "")
+    main = main_artist_tokens(song.get("artist", ""))
+    strict = same_artist(main, t)
+    censored = _censored(title)
+    if censored is not None:
+        return 0 if strict and _censored_match(censored, t.get("title", "")) else None
+    words = " ".join(tokens(clean_title(title)))
+    if not words:  # «+», «%»: el título tal cual
+        return 0 if strict and fold(t.get("title", "")).strip() == fold(title).strip() else None
+    have = " ".join(tokens(clean_title(t.get("title", ""))))
+    full_s, full_t = full_title(title), full_title(t.get("title", ""))
+    if have == words or full_t == full_s:
+        return 0 if strict else (1 if similar_artist(main, t) else None)
+    if not strict:
+        return None
+    base_s, base_t = base_title(title), base_title(t.get("title", ""))
+    if base_s and base_s == base_t:
+        extra_s = full_s.split()[len(base_s.split()):] if full_s.startswith(base_s) else full_s.split()
+        extra_t = full_t.split()[len(base_t.split()):] if full_t.startswith(base_t) else full_t.split()
+        if not _is_version(extra_s) and not _is_version(extra_t):
+            return 2
+    if have.startswith(words) or full_t.startswith(full_s + " "):
+        return 3
+    return None
+
+
+def pick_match(song: dict, candidates: list[dict]) -> str | None:
+    """La mejor de `candidates`: por orden de parecido y, en cada nivel, la del mismo álbum si la hay."""
+    ranked: dict[int, list[dict]] = {}
+    seen: set[str] = set()
+    for t in candidates:
+        if t.get("id") in seen:
+            continue
+        seen.add(t.get("id"))
+        r = match_rank(song, t)
+        if r is not None:
+            ranked.setdefault(r, []).append(t)
+    if not ranked:
+        return None
+    # A igual parecido, la que tiene más de los artistas pedidos (también los «feat.» del título): «Nada (feat. Leslie
+    # Grace)» antes que «Nada» a secas.
+    featured = " ".join(re.findall(r"[\(\[](?:feat|ft|with|con)\.?\s+([^\)\]]*)", song.get("title", ""), re.IGNORECASE))
+    wanted_artists = set(tokens(f"{song.get('artist', '')} {featured}"))
+    for r in ranked:
+        ranked[r].sort(key=lambda t: -len(wanted_artists & set(_artist_words(t) + tokens(t.get("title", "")))))
     album = song.get("album") or ""
     if album:
-        queries.append(f"{' '.join(tokens(clean_title(album)))} {' '.join(main_artist)}")
-    candidates: list[dict] = []
-    for q in queries:
-        candidates += await nd.search(q)
-        if any(same_artist(t) and norm_title(t).startswith(words) for t in candidates):
-            break
-    matching = [t for t in candidates if same_artist(t)]
-    exact = [t for t in matching if norm_title(t) == words]
-    variants = [t for t in matching if norm_title(t).startswith(words)]
-    if album:
         wanted = norm(album)
-        for group in (exact, variants):
-            for t in group:
+        for r in sorted(ranked):
+            for t in ranked[r]:
                 if norm(t.get("album", "")) == wanted:
                     return t["id"]
-    best = exact[0] if exact else (variants[0] if variants else None)
-    return best["id"] if best else None
+    return ranked[min(ranked)][0]["id"]
+
+
+def search_queries(song: dict) -> list[str]:
+    """Lo que se le pregunta a Navidrome, en orden (se para en cuanto algo encaja)."""
+    title = song.get("title", "")
+    artist = song.get("artist", "")
+    main = " ".join(main_artist_tokens(artist))
+    if "*" in title:  # sin las palabras tapadas, que Navidrome no encontraría
+        words = " ".join(w for w in (" ".join(tokens(x)) for x in clean_title(title).split() if "*" not in x) if w)
+    else:
+        words = " ".join(tokens(clean_title(title)))
+    if not words:  # «+», «%»: por el artista (todos y el principal)
+        return [q for q in dict.fromkeys([" ".join(tokens(artist)), main]) if q]
+    queries = [f"{words} {main}".strip(), words]
+    album = song.get("album") or ""
+    if album:
+        queries.append(f"{' '.join(tokens(clean_title(album)))} {main}".strip())
+    # 4) Solo el nombre (sin lo de entre paréntesis), por si el archivo no lleva el añadido de Apple
+    #    («Autumn Leaves (Bonus Track)» está como «Autumn Leaves - Deluxe Edition»).
+    base = base_title(title)
+    if base and base != words:
+        queries.append(f"{base} {main}".strip())
+    return queries
+
+
+async def find_track(nd: Navidrome, song: dict) -> str | None:
+    """El id de la canción en Navidrome (o None). Igual que findTrack en la app."""
+    candidates: list[dict] = []
+    for q in search_queries(song):
+        candidates += await nd.search(q)
+        if any(match_rank(song, t) is not None for t in candidates):
+            break
+    return pick_match(song, candidates)
 
 
 def match_library(entries: list[dict], order: list[dict], known: dict[str, str]) -> dict[str, str]:
     """Qué canción de tu biblioteca es cada una del proveedor, sin volver a buscar en Navidrome: con las mismas
-    reglas que `find_track` (título limpio, artista principal, mismo álbum si se puede, y si no una variante).
-    `known`: las que ya se saben (clave → id). Devuelve clave → id para todas las que encuentra."""
-    by_title: dict[str, list[dict]] = {}
+    reglas que `find_track` (`match_rank`). `known`: las que ya se saben (clave → id). Devuelve clave → id."""
     by_first_word: dict[str, list[dict]] = {}
+    by_raw_title: dict[str, list[dict]] = {}
     for e in entries:
-        words = tokens(clean_title(e.get("title", "")))
+        t = e.get("title", "")
+        words = tokens(clean_title(t)) or tokens(t)
         if words:
-            by_title.setdefault(" ".join(words), []).append(e)
             by_first_word.setdefault(words[0], []).append(e)
+        by_raw_title.setdefault(fold(t).strip(), []).append(e)
     library_ids = {e["id"] for e in entries}
     result: dict[str, str] = {}
     for item in order:
@@ -190,27 +318,12 @@ def match_library(entries: list[dict], order: list[dict], known: dict[str, str])
         if known.get(key) in library_ids:
             result[key] = known[key]
             continue
-        words = tokens(clean_title(item.get("title", "")))
-        if not words:
-            continue
-        wanted = " ".join(words)
-        artist = item.get("artist", "")
-        main_artist = tokens(re.split(r"[,&]", artist)[0] if artist else "")
-
-        def same_artist(e: dict) -> bool:
-            if not main_artist:
-                return True
-            have = tokens(f"{e.get('artist', '')} {e.get('displayArtist', '')} {e.get('displayAlbumArtist', '')}")
-            return all(a in have for a in main_artist)
-
-        exact = [e for e in by_title.get(wanted, []) if same_artist(e)]
-        variants = exact or [e for e in by_first_word.get(words[0], [])
-                             if same_artist(e) and " ".join(tokens(clean_title(e.get("title", "")))).startswith(wanted)]
-        if not variants:
-            continue
-        album = norm(item.get("album", ""))
-        same_album = [e for e in variants if album and norm(e.get("album", "")) == album]
-        result[key] = (same_album or variants)[0]["id"]
+        title = item.get("title", "")
+        words = tokens(clean_title(title))
+        pool = by_first_word.get(words[0], []) if words else by_raw_title.get(fold(title).strip(), [])
+        found = pick_match(item, pool)
+        if found:
+            result[key] = found
     return result
 
 

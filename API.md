@@ -247,8 +247,14 @@ playlists y ordena tu biblioteca, aunque cierres la app.
 - Una importación a la vez por persona; como mucho 20.000 canciones.
 - `GET /api/v1/import/jobs/{id}` → `status` (`running`, `done`, `failed`, `interrupted`, `cancelled`), `done` y
   `total`; al terminar, `result` con lo encontrado (`matches`: clave → id de la canción) y lo que falta.
-- La búsqueda es la misma que la de la app (`find_track` en `app/importer.py` y `findTrack` en
-  `Melvara/Catalog/Charts.swift`): si se cambia una, hay que cambiar la otra.
+- La búsqueda es la misma que la de la app (`find_track` / `match_rank` en `app/importer.py` y `TrackMatch` en
+  `Melvara/Catalog/TrackMatch.swift`): si se cambia una, hay que cambiar la otra.
+- **Cuándo es la misma canción** (2.15), de más a menos parecida: mismo título (también «Título (Versión)» =
+  «Título - Versión» y «Vol. 52/66» = «Vol. 52») y artista; mismo título y el artista escrito de otra forma
+  («Rusher King» / «Rusherking»); el mismo nombre con otro añadido que **no** es una versión («Nada [Inédita 2015]» /
+  «Nada»); y una variante cuyo título sigue al pedido. Los títulos tapados con asteriscos («P\*\*\*y») y los de un solo
+  símbolo («+») también. Nunca se acepta otra versión (remix, acústico, en directo, instrumental…). A igual parecido,
+  la del mismo álbum y la que tiene más de los artistas pedidos.
 
 Si Navidrome responde «database is locked» (por ejemplo, escaneando la biblioteca), el servidor espera y repite
 hasta unos 3 minutos: ese error quiere decir que no se ha guardado nada, así que repetir no duplica (2.9.1).
