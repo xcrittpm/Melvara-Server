@@ -29,7 +29,7 @@ from .lastfm import LastFM, clean_search
 
 log = logging.getLogger("melvara.sources")
 
-UA = {"User-Agent": "MelvaraServer/2 (+https://github.com/xcrittpm/Melvara)"}
+UA = {"User-Agent": "MelvaraServer/2 (+https://github.com/xcrittpm/Melvara-Server)"}
 NAMES = {"apple": "Apple Music", "deezer": "Deezer", "lastfm": "Last.fm", "listenbrainz": "ListenBrainz"}
 CHART_ORDER = ("apple", "deezer", "lastfm", "listenbrainz")
 SEARCH_ORDER = ("deezer", "lastfm")

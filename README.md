@@ -67,15 +67,17 @@ no le envía nada.
 
 ## Instalar (Docker)
 
-1. Copia `.env.example` como `.env` y rellena:
+1. Descarga el código y entra en la carpeta:
+   `git clone https://github.com/xcrittpm/Melvara-Server.git && cd Melvara-Server`
+2. Copia `.env.example` como `.env` y rellena:
    - `NAVIDROME_URL`: tu Navidrome visto **desde el contenedor** (p. ej. `http://192.168.1.10:4533`).
    - Opcional: `LASTFM_API_KEY` y `LASTFM_SHARED_SECRET`, de [Last.fm](https://www.last.fm/api/account/create)
      (desde el 1/12/2026, con Last.fm Pro). También se pueden poner luego en la web de administración. Sin
      clave, la búsqueda y las listas salen de Deezer, Apple Music y ListenBrainz; sin el secreto no se puede
      conectar el perfil de Last.fm desde la app.
-2. `docker compose up -d --build`
-3. Publica el puerto 8095 con tu proxy (Caddy, Nginx…) en la dirección de la tabla, con https.
-4. Comprueba: `curl https://<tu-dirección>/api/v1/status` → `{"service":"melvara-api",…}`.
+3. `docker compose up -d --build` (para actualizar: `git pull` y otra vez lo mismo)
+4. Publica el puerto 8095 con tu proxy (Caddy, Nginx…) en la dirección de la tabla, con https.
+5. Comprueba: `curl https://<tu-dirección>/api/v1/status` → `{"service":"melvara-api",…}`.
 
 ## API
 
@@ -108,3 +110,8 @@ Deezer, Apple Music (feed público de Apple Marketing Tools) y ListenBrainz se u
 dónde sale cada lista; Last.fm, con la clave de API de quien lo instala. Es para uso personal y no comercial:
 revisa las condiciones de cada servicio si lo usas de otra forma. A estos servicios solo llega lo buscado y el
 país de la lista, nunca quién lo pide.
+
+## Licencia
+
+[MIT](LICENSE). La app Melvara (iPhone, iPad, CarPlay y Android) está en
+[github.com/xcrittpm/Melvara](https://github.com/xcrittpm/Melvara).
