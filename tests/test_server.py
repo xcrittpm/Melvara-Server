@@ -540,9 +540,11 @@ def test_escuchar_en_grupo():
            headers=headers("ana"))
     seen = c.get(f"/api/v1/jam/{code}", headers=headers("pepe")).json()["jam"]
     assert seen["nowPlaying"]["title"] == "Ahora" and seen["queue"][0]["addedBy"] == "pepe" and seen["isHost"] is False
-    # Cambiar de canción y adelantar: solo si el anfitrión lo permite (por defecto, no).
-    assert seen["perms"] == {"skip": False, "seek": False}
+    # Cambiar de canción y adelantar: por defecto sí (2.16); el anfitrión puede quitarlo.
+    assert seen["perms"] == {"skip": True, "seek": True}
+    c.post(f"/api/v1/jam/{code}/perms", json={"skip": False, "seek": False}, headers=headers("ana"))
     assert c.post(f"/api/v1/jam/{code}/control", json={"action": "next"}, headers=headers("pepe")).status_code == 403
+    assert c.post(f"/api/v1/jam/{code}/add", json={"tracks": [{"id": "s9"}], "mode": "now"}, headers=headers("pepe")).status_code == 403
     perms = c.post(f"/api/v1/jam/{code}/perms", json={"skip": True}, headers=headers("ana")).json()["jam"]["perms"]
     assert perms == {"skip": True, "seek": False}
     assert c.post(f"/api/v1/jam/{code}/perms", json={"seek": True}, headers=headers("pepe")).status_code == 403
@@ -1090,3 +1092,26 @@ def test_lo_de_antes_sigue_igual():
     # El mismo álbum, si lo hay.
     song = _song("Hola", "Alguien", "Dos")
     assert pick_match(song, [_t("Hola", "Alguien", "a", "Uno"), _t("Hola", "Alguien", "b", "Dos")]) == "b"
+
+
+def test_jam_queue_from_members(tmp_path):
+    """2.16: quien se une pone ya, a continuación o al final, pausa, salta a una de la cola, la mueve o la quita."""
+    db = str(tmp_path / "j.sqlite")
+    main.configure(FakeAuth(), RateLimiter(100), Wishlist(db), FakeLastFM(), "", Reports(db), ExtraLists(db))
+    main.state.jams = main.Jams()
+    c = TestClient(main.app)
+    assert c.get("/api/v1/status").json()["jamQueue"] is True
+    code = c.post("/api/v1/jam", headers=headers("ana")).json()["jam"]["code"]
+    c.post(f"/api/v1/jam/{code}/join", headers=headers("pepe"))
+    for mode in ("now", "next", "end", "raro"):
+        assert c.post(f"/api/v1/jam/{code}/add", json={"tracks": [{"id": f"t-{mode}"}], "mode": mode},
+                      headers=headers("pepe")).json()["added"] == 1
+    for body in ({"action": "pause"}, {"action": "play"}, {"action": "jump", "id": "t-end"},
+                 {"action": "move", "id": "t-next", "to": 3}, {"action": "remove", "id": "t-now"}):
+        assert c.post(f"/api/v1/jam/{code}/control", json=body, headers=headers("pepe")).json()["ok"] is True
+    for bad in ({"action": "jump"}, {"action": "move", "id": "x"}, {"action": "move", "id": "x", "to": -1}):
+        assert c.post(f"/api/v1/jam/{code}/control", json=bad, headers=headers("pepe")).status_code == 400
+    pending = c.get(f"/api/v1/jam/{code}/pending", headers=headers("ana")).json()
+    assert [a["mode"] for a in pending["adds"]] == ["now", "next", "end", "end"]
+    assert [(x["action"], x.get("id"), x.get("to")) for x in pending["commands"]] == [
+        ("pause", None, None), ("play", None, None), ("jump", "t-end", None), ("move", "t-next", 3), ("remove", "t-now", None)]

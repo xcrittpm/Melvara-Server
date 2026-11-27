@@ -69,6 +69,7 @@ curl https://musica-api.ejemplo.com/api/v1/status
 - `serviceApi`: la ruta de servicio está activa.
 - `reports`, `extraLists`, `imports`: denuncias, listas extra e importaciones en el servidor.
 - `jam` (2.8): escuchar en grupo. `jamControl` (2.9): los demás pueden cambiar de canción o mover la barra.
+  `jamQueue` (2.16): poner ya o a continuación, pausar, saltar, reordenar y quitar desde el reproductor de los demás.
 - `social` (2.10): lista de personas y lo que escuchan tus seguidores mutuos.
 
 ## Acceso de usuario (cabeceras `X-Melvara-*`)
@@ -289,6 +290,11 @@ Solo pueden unirse personas con cuenta en el mismo Navidrome. Todo vive en memor
   `control` con `{"action": "next" | "previous" | "seek", "position": 30}`; el anfitrión lo aplica.
 - El anfitrión cuenta qué suena, por dónde va (`position`, `playing`) y qué viene (`state`); el estado lleva
   `now` (la hora del servidor) para calcular la posición sin depender del reloj de cada iPhone.
+- **2.16** (`status.jamQueue`): la música suena solo en el anfitrión y el reproductor de los demás enseña lo del grupo.
+  `add` acepta `"mode": "end" | "next" | "now"` (ya: como cambiar de canción) y `control` también `play`, `pause`,
+  `jump` (`id`: suena esa de la cola), `move` (`id`, `to`: su nuevo sitio, desde 0) y `remove` (`id`). `pending`
+  devuelve el `mode` de cada añadido y `id`/`to` de cada orden. Los permisos vienen **activados** por defecto:
+  `skip` cubre pasar, volver, poner ya, pausar, saltar, reordenar y quitar; `seek`, mover la barra.
 
 ## Ruta de servicio: las listas de todos
 

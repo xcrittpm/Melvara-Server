@@ -328,7 +328,7 @@ async def status(request: Request):
                          "lastPlayed": state.social is not None, "invites": state.invites is not None,
                          "dislikes": state.dislikes is not None, "similar": state.similar is not None, "minApp": state.sources.settings.get("min_app"), "minAndroid": state.sources.settings.get("min_android"), "serviceApi": bool(state.service_token),
                          "reports": state.reports is not None, "extraLists": state.extras is not None,
-                         "imports": state.imports is not None, "jam": True, "jamControl": True, "social": state.social is not None},
+                         "imports": state.imports is not None, "jam": True, "jamControl": True, "jamQueue": True, "social": state.social is not None},
                         headers=SECURITY_HEADERS)
 
 
@@ -619,7 +619,7 @@ async def jam_action(request: Request, user: str):
         return {"left": True}
     if action == "add":
         tracks = body.get("tracks")
-        return state.jams.add(code, user, tracks if isinstance(tracks, list) else [])
+        return state.jams.add(code, user, tracks if isinstance(tracks, list) else [], str(body.get("mode", "end")))
     if action == "pending":
         try:
             after = int(request.query_params.get("after", "0"))
@@ -634,7 +634,8 @@ async def jam_action(request: Request, user: str):
     if action == "perms":
         return {"jam": state.jams.set_perms(code, user, body.get("skip"), body.get("seek"))}
     if action == "control":
-        return state.jams.control(code, user, str(body.get("action", "")), body.get("position"))
+        return state.jams.control(code, user, str(body.get("action", "")), body.get("position"),
+                                  body.get("id"), body.get("to"))
     if action == "kick":
         return {"jam": state.jams.kick(code, user, str(body.get("user", "")))}
     return None

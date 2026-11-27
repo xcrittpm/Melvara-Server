@@ -1,6 +1,8 @@
-"""Escuchar en grupo: una persona pone la música (el anfitrión) y las demás, escaneando su QR, añaden
-canciones a su cola desde su Melvara. Si el anfitrión lo permite, también pueden cambiar de canción o
-adelantar y atrasar (el anfitrión lo recoge y lo aplica en su reproductor).
+"""Escuchar en grupo: una persona pone la música (el anfitrión) y las demás, escaneando su QR, se unen. La música
+suena solo en el móvil del anfitrión; en el de los demás, su propio reproductor enseña lo que suena en el grupo y lo
+que hacen (poner una canción ya, a continuación o al final, pausar, pasar, adelantar, saltar a una de la cola,
+reordenarla o quitar) se le pide al anfitrión, que lo aplica (2.16). El anfitrión puede no permitir cambiar lo que
+suena (`skip`: pasar, poner ya, pausar, saltar, reordenar, quitar) ni adelantar o atrasar (`seek`); por defecto, sí.
 
 Solo personas con cuenta en el mismo Navidrome (cada petición se comprueba con él, como todo en Melvara
 Server): no hay invitados. Todo vive en memoria (al reiniciar el servidor, las sesiones se acaban) y caduca
@@ -18,7 +20,8 @@ MAX_QUEUE = 500
 MAX_ADDS = 2000
 MAX_TRACK_FIELDS = 40
 MAX_COMMANDS = 200
-CONTROL_ACTIONS = ("next", "previous", "seek")
+CONTROL_ACTIONS = ("next", "previous", "seek", "play", "pause", "jump", "move", "remove")
+ADD_MODES = ("end", "next", "now")
 
 
 def _clean_track(t) -> dict | None:
@@ -63,7 +66,7 @@ class Jams:
             code = secrets.token_urlsafe(9)
             self._jams[code] = {"code": code, "host": host, "members": {}, "kicked": set(), "adds": [], "seq": 0,
                                 "nowPlaying": None, "queue": [], "touched": time.time(), "started": int(time.time()),
-                                "perms": {"skip": False, "seek": False}, "commands": [],
+                                "perms": {"skip": True, "seek": True}, "commands": [],
                                 "position": 0.0, "positionAt": time.time(), "playing": False}
             return self._public(self._jams[code], host)
 
@@ -98,9 +101,13 @@ class Jams:
             jam["kicked"].add(who)
             return self._public(jam, user)
 
-    def add(self, code: str, user: str, tracks: list) -> dict:
+    def add(self, code: str, user: str, tracks: list, mode: str = "end") -> dict:
+        """Añadir a la cola del grupo: al final (todos pueden), a continuación o ya (como cambiar de canción)."""
         with self._lock:
             jam = self._get(code, user)
+            mode = mode if mode in ADD_MODES else "end"
+            if mode == "now" and not jam["perms"]["skip"] and user != jam["host"]:
+                raise PermissionError("Quien la ha abierto no deja cambiar lo que suena")
             clean = [t for t in (_clean_track(x) for x in tracks[:50]) if t]
             if not clean:
                 raise ValueError("No hay canciones que añadir")
@@ -108,7 +115,7 @@ class Jams:
                 raise ValueError("La sesión tiene demasiadas canciones")
             for t in clean:
                 jam["seq"] += 1
-                jam["adds"].append({"seq": jam["seq"], "by": user, "track": t, "at": int(time.time())})
+                jam["adds"].append({"seq": jam["seq"], "by": user, "track": t, "at": int(time.time()), "mode": mode})
             if user in jam["members"]:
                 jam["members"][user] = int(time.time())
             return {"added": len(clean)}
@@ -123,8 +130,9 @@ class Jams:
                 jam["perms"]["seek"] = seek
             return self._public(jam, user)
 
-    def control(self, code: str, user: str, action: str, position=None) -> dict:
-        """Alguien de la sesión pide pasar de canción, volver o ir a un punto (si el anfitrión lo permite)."""
+    def control(self, code: str, user: str, action: str, position=None, track_id=None, to=None) -> dict:
+        """Alguien de la sesión pide pasar de canción, volver, ir a un punto, pausar o seguir, saltar a una de la
+        cola (`id`), moverla a otro sitio (`id`, `to`) o quitarla (`id`), si el anfitrión lo permite."""
         with self._lock:
             jam = self._get(code, user)
             if action not in CONTROL_ACTIONS:
@@ -136,6 +144,14 @@ class Jams:
                 if isinstance(position, bool) or not isinstance(position, (int, float)) or not 0 <= position < 24 * 3600:
                     raise ValueError("Falta el punto de la canción")
                 command["position"] = float(position)
+            if action in ("jump", "move", "remove"):
+                if not isinstance(track_id, str) or not track_id.strip() or len(track_id) > 200:
+                    raise ValueError("Falta la canción")
+                command["id"] = track_id
+            if action == "move":
+                if isinstance(to, bool) or not isinstance(to, int) or not 0 <= to < MAX_QUEUE:
+                    raise ValueError("Falta el sitio")
+                command["to"] = to
             jam["seq"] += 1
             command["seq"] = jam["seq"]
             jam["commands"] = (jam["commands"] + [command])[-MAX_COMMANDS:]
